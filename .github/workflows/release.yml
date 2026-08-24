@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    environment: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - run: npm ci
+      - name: Build release
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: node scripts/build-release.mjs "${VERSION#v}" dist
+      - name: Attest binaries and checksum manifest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/artifacts/*
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/artifacts/* --verify-tag --generate-notes
+      - name: Publish native packages
+        run: |
+          for package in dist/npm/cli-darwin-* dist/npm/cli-linux-* dist/npm/cli-win32-*; do
+            npm publish "$package" --provenance --access public
+          done
+      - name: Publish command and initializer
+        run: |
+          npm publish dist/npm/cli --provenance --access public
+          npm publish dist/npm/create-oe --provenance --access public

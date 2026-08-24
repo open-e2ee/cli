@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -14,18 +14,70 @@ const required = [
   "packages/cli-win32-x64/package.json",
   "Formula/oe.rb",
   ".github/workflows/release.yml",
+  "scripts/test-native-install.mjs",
 ];
 
 for (const relative of required) {
   await access(path.join(root, relative));
 }
 
-const cli = JSON.parse(await readFile(path.join(root, "packages/cli/package.json"), "utf8"));
+const cli = JSON.parse(
+  await readFile(path.join(root, "packages/cli/package.json"), "utf8"),
+);
 if (cli.scripts?.postinstall) {
   throw new Error("@open-e2ee/cli must not use a postinstall download");
 }
 if (Object.keys(cli.optionalDependencies ?? {}).length !== 6) {
-  throw new Error("@open-e2ee/cli must declare all six optional platform packages");
+  throw new Error(
+    "@open-e2ee/cli must declare all six optional platform packages",
+  );
+}
+
+const launcher = await readFile(
+  path.join(root, "packages/cli/bin/oe.js"),
+  "utf8",
+);
+if (/\bfetch\s*\(|https?:\/\//.test(launcher)) {
+  throw new Error("the npm launcher must not contain a binary download path");
+}
+
+for (const packageName of Object.keys(cli.optionalDependencies)) {
+  const sourceDirectory = path.join(
+    root,
+    "packages",
+    packageName.replace("@open-e2ee/", ""),
+    "bin",
+  );
+  const files = await readdir(sourceDirectory);
+  if (files.some((file) => file === "oe" || file === "oe.exe")) {
+    throw new Error(
+      `source package ${packageName} contains a generated binary`,
+    );
+  }
+}
+
+const releaseWorkflow = await readFile(
+  path.join(root, ".github/workflows/release.yml"),
+  "utf8",
+);
+for (const contract of [
+  "id-token: write",
+  "attestations: write",
+  "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
+  "subject-path: dist/artifacts/*",
+  "--provenance",
+]) {
+  if (!releaseWorkflow.includes(contract)) {
+    throw new Error(`release workflow is missing ${contract}`);
+  }
+}
+
+const packageLock = await readFile(
+  path.join(root, "package-lock.json"),
+  "utf8",
+);
+if (/\b(segment|posthog|mixpanel|amplitude|sentry)\b/i.test(packageLock)) {
+  throw new Error("CLI dependencies contain a telemetry package");
 }
 
 process.stdout.write("packaging contract passed\n");

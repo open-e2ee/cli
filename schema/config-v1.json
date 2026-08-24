@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-e2ee.dev/schemas/config/v1.json",
+  "title": "OpenE2EE project configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "project", "writer", "relay", "environments"],
+  "properties": {
+    "$schema": { "const": "https://open-e2ee.dev/schemas/config/v1.json" },
+    "project": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "writer": { "enum": ["config", "console"] },
+    "relay": { "$ref": "#/$defs/relayPolicy" },
+    "environments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["development", "production"],
+      "properties": {
+        "development": { "$ref": "#/$defs/environment" },
+        "production": { "$ref": "#/$defs/environment" }
+      }
+    }
+  },
+  "$defs": {
+    "retention": {
+      "enum": ["1h", "6h", "12h", "1d", "3d", "7d", "14d", "30d"]
+    },
+    "relayPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "deliveryRetention": { "$ref": "#/$defs/retention" },
+        "attachmentRetention": { "$ref": "#/$defs/retention" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "publishableKey": { "type": "string", "minLength": 1 },
+        "relay": { "$ref": "#/$defs/relayPolicy" }
+      }
+    }
+  }
+}

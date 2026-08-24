@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 )
@@ -59,7 +60,15 @@ func TestCommandSurfaceGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(bytes.TrimSpace(output), bytes.TrimSpace(golden)) {
+	var gotValue any
+	var wantValue any
+	if err := json.Unmarshal(output, &gotValue); err != nil {
+		t.Fatalf("decode command output: %v", err)
+	}
+	if err := json.Unmarshal(golden, &wantValue); err != nil {
+		t.Fatalf("decode golden output: %v", err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
 		t.Fatalf("command surface drifted\nwant: %s\n got: %s", golden, output)
 	}
 }
