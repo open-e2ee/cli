@@ -1,6 +1,6 @@
 module github.com/open-e2ee/cli
 
-go 1.27.0
+go 1.26.0
 
 require (
 	github.com/gofrs/flock v0.13.0

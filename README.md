@@ -80,7 +80,7 @@ Homebrew distribution remains gated on the coordinated public beta release.
 
 ## Development
 
-Development needs Go 1.27, Node 20 or later, and npm 11 or later.
+Development needs Go 1.26 or later, Node 20 or later, and npm 11 or later.
 
 ```bash
 go test -race ./...
