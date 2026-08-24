@@ -1,0 +1,22 @@
+{
+  "name": "@open-e2ee/cli-win32-x64",
+  "version": "0.1.0",
+  "description": "OpenE2EE CLI for Windows x64",
+  "license": "Apache-2.0",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin"
+  ],
+  "exports": {
+    "./bin/oe.exe": "./bin/oe.exe"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-e2ee/cli.git"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "status": "ok",
+  "command": "help",
+  "message": "Use oe <command> --help for command details.",
+  "data": {
+    "commands": [
+      "init",
+      "login",
+      "dev",
+      "deploy",
+      "plan",
+      "doctor",
+      "project",
+      "provider",
+      "secret"
+    ]
+  }
+}

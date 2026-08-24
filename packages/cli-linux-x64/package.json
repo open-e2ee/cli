@@ -1,0 +1,22 @@
+{
+  "name": "@open-e2ee/cli-linux-x64",
+  "version": "0.1.0",
+  "description": "OpenE2EE CLI for Linux x64",
+  "license": "Apache-2.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin"
+  ],
+  "exports": {
+    "./bin/oe": "./bin/oe"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-e2ee/cli.git"
+  }
+}
