@@ -7,6 +7,7 @@
     "format:check": "prettier --check .",
     "homebrew:test": "./scripts/test-homebrew.sh",
     "package:verify": "node ./scripts/verify-packaging.mjs",
+    "test:native": "node ./scripts/test-native-install.mjs",
     "test": "npm run package:verify && node --test ./scripts/*.test.mjs"
   },
   "devDependencies": {

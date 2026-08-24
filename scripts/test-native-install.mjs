@@ -11,6 +11,16 @@ if (!binary)
 const root = path.resolve(import.meta.dirname, "..");
 const platformPackage = `cli-${process.platform}-${process.arch}`;
 const directory = await mkdtemp(path.join(os.tmpdir(), "oe-native-install-"));
+const npmExecutable = process.env.npm_execpath;
+if (!npmExecutable)
+  throw new Error("run this check through npm run test:native");
+
+function runNpm(arguments_, options = {}) {
+  return spawnSync(process.execPath, [npmExecutable, ...arguments_], {
+    ...options,
+    encoding: "utf8",
+  });
+}
 
 try {
   const stagedCLI = path.join(directory, "cli");
@@ -33,19 +43,18 @@ try {
 
   const tarballs = [];
   for (const packageDirectory of [stagedPlatform, stagedCLI]) {
-    const packed = spawnSync("npm", ["pack", "--silent"], {
-      cwd: packageDirectory,
-      encoding: "utf8",
-    });
+    const packed = runNpm(["pack", "--silent"], { cwd: packageDirectory });
     assert.equal(packed.status, 0, packed.stderr);
     tarballs.push(path.join(packageDirectory, packed.stdout.trim()));
   }
   const install = path.join(directory, "install");
-  const installed = spawnSync(
-    "npm",
-    ["install", "--prefix", install, "--silent", ...tarballs],
-    { encoding: "utf8" },
-  );
+  const installed = runNpm([
+    "install",
+    "--prefix",
+    install,
+    "--silent",
+    ...tarballs,
+  ]);
   assert.equal(installed.status, 0, installed.stderr);
   const result = spawnSync(
     process.execPath,

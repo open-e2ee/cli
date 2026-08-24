@@ -28,7 +28,7 @@ jobs:
       - run: go vet ./...
       - run: go build -trimpath -o bin/oe${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/oe
       - name: Native npm package install
-        run: node scripts/test-native-install.mjs bin/oe${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: npm run test:native -- bin/oe${{ runner.os == 'Windows' && '.exe' || '' }}
 
   packaging:
     runs-on: ubuntu-latest
