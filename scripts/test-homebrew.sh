@@ -20,6 +20,7 @@ brew tap-new --no-git "$tap_name"
 tap_root=$(brew --repository "$tap_name")
 cp "$repository_root/Formula/oe.rb" "$tap_root/Formula/oe.rb"
 brew audit --strict "$tap_name/oe"
+HOMEBREW_NO_AUTO_UPDATE=1 brew fetch --force "$tap_name/oe"
 
 tar \
   --exclude=.git \
@@ -35,8 +36,10 @@ checksum=$(shasum -a 256 "$test_root/oe-0.1.0.tar.gz" | awk '{print $1}')
 OE_FORMULA_URL="file://$test_root/oe-0.1.0.tar.gz" \
 OE_FORMULA_SHA256="$checksum" \
 ruby -pi -e '
-  if $_.include?(%q{  head "https://github.com/open-e2ee/cli.git", branch: "main"})
-    $_ = "  url \"#{ENV.fetch("OE_FORMULA_URL")}\"\n  version \"0.1.0\"\n  sha256 \"#{ENV.fetch("OE_FORMULA_SHA256")}\"\n"
+  if $_.start_with?(%q{  url })
+    $_ = "  url \"#{ENV.fetch("OE_FORMULA_URL")}\"\n  version \"0.1.0\"\n"
+  elsif $_.start_with?(%q{  sha256 })
+    $_ = "  sha256 \"#{ENV.fetch("OE_FORMULA_SHA256")}\"\n"
   end
 ' "$tap_root/Formula/oe.rb"
 
