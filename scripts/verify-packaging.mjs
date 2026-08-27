@@ -114,9 +114,18 @@ for (const contract of [
   "sha256sum cli-sbom.cdx.json >> checksums.txt",
   "subject-path: dist/artifacts/*",
   "--provenance",
+  'tags: ["v*"]',
+  "gh release upload",
+  "npm view",
 ]) {
   if (!releaseWorkflow.includes(contract)) {
     throw new Error(`release workflow is missing ${contract}`);
+  }
+}
+
+for (const forbidden of ["workflow_dispatch:", "NPM_BOOTSTRAP_TOKEN"]) {
+  if (releaseWorkflow.includes(forbidden)) {
+    throw new Error(`release workflow must not contain ${forbidden}`);
   }
 }
 
