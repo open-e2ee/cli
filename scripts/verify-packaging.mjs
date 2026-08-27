@@ -15,6 +15,7 @@ const required = [
   "Formula/oe.rb",
   ".github/workflows/release.yml",
   "scripts/test-native-install.mjs",
+  "scripts/verify-release-sbom.mjs",
 ];
 
 for (const relative of required) {
@@ -64,6 +65,11 @@ for (const contract of [
   "id-token: write",
   "attestations: write",
   "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
+  "CycloneDX/gh-gomod-generate-sbom@efc74245d6802c8cefd925620515442756c70d8f",
+  "version: v1.10.0",
+  "-output dist/artifacts/cli-sbom.cdx.json",
+  "node scripts/verify-release-sbom.mjs",
+  "sha256sum cli-sbom.cdx.json >> checksums.txt",
   "subject-path: dist/artifacts/*",
   "--provenance",
 ]) {

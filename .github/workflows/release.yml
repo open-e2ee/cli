@@ -29,6 +29,21 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
         run: node scripts/build-release.mjs "${VERSION#v}" dist
+      - name: Generate CLI SBOM
+        uses: CycloneDX/gh-gomod-generate-sbom@efc74245d6802c8cefd925620515442756c70d8f # v2.0.0
+        with:
+          version: v1.10.0
+          args: >-
+            mod -licenses -std -short-purls -json -noserial -notimestamp
+            -output dist/artifacts/cli-sbom.cdx.json .
+      - name: Verify CLI SBOM
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          node scripts/verify-release-sbom.mjs dist/artifacts/cli-sbom.cdx.json "${VERSION#v}"
+          cd dist/artifacts
+          sha256sum cli-sbom.cdx.json >> checksums.txt
+          sort -o checksums.txt checksums.txt
       - name: Attest binaries and checksum manifest
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:

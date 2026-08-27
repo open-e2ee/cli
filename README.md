@@ -68,8 +68,8 @@ revision. A console-first project or a revision conflict fails closed.
 `@open-e2ee/cli` contains a small Node launcher and six optional native packages:
 macOS, Linux, and Windows on arm64 and x64. Installation does not run a
 postinstall download. The release workflow cross-compiles the Go command, creates
-checksums, and creates GitHub build-provenance attestations. Verify a published
-artifact with:
+checksums and a CycloneDX SBOM, and creates GitHub build-provenance attestations
+for every release artifact. Verify a published artifact with:
 
 ```bash
 gh attestation verify PATH_TO_ARTIFACT -R open-e2ee/cli
