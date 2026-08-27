@@ -1,6 +1,6 @@
 {
   "name": "@open-e2ee/cli",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "OpenE2EE project command-line interface",
   "license": "Apache-2.0",
   "type": "module",
@@ -16,12 +16,12 @@
     "README.md"
   ],
   "optionalDependencies": {
-    "@open-e2ee/cli-darwin-arm64": "0.1.0",
-    "@open-e2ee/cli-darwin-x64": "0.1.0",
-    "@open-e2ee/cli-linux-arm64": "0.1.0",
-    "@open-e2ee/cli-linux-x64": "0.1.0",
-    "@open-e2ee/cli-win32-arm64": "0.1.0",
-    "@open-e2ee/cli-win32-x64": "0.1.0"
+    "@open-e2ee/cli-darwin-arm64": "1.0.0",
+    "@open-e2ee/cli-darwin-x64": "1.0.0",
+    "@open-e2ee/cli-linux-arm64": "1.0.0",
+    "@open-e2ee/cli-linux-x64": "1.0.0",
+    "@open-e2ee/cli-win32-arm64": "1.0.0",
+    "@open-e2ee/cli-win32-x64": "1.0.0"
   },
   "engines": {
     "node": ">=20"

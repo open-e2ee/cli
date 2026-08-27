@@ -1,6 +1,6 @@
 {
   "name": "@open-e2ee/cli-darwin-x64",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "OpenE2EE CLI for macOS x64",
   "license": "Apache-2.0",
   "os": [

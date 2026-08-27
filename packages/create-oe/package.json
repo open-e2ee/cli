@@ -1,6 +1,6 @@
 {
   "name": "create-oe",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Initialize an OpenE2EE project and run a local encrypted round trip",
   "license": "Apache-2.0",
   "type": "module",
@@ -12,8 +12,8 @@
     "README.md"
   ],
   "dependencies": {
-    "@open-e2ee/cli": "0.1.0",
-    "@open-e2ee/signal-protocol-sdk": "^0.4.0"
+    "@open-e2ee/cli": "1.0.0",
+    "@open-e2ee/signal-protocol-sdk": "^1.0.0"
   },
   "engines": {
     "node": ">=20"

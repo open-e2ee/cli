@@ -3,9 +3,9 @@
 `oe` initializes OpenE2EE projects, keeps public service policy in a deterministic
 file, and provides the command boundary for managed development and deployment.
 
-Managed Relay is under development and is not publicly available. This public
-repository lets reviewers inspect the command, config, credential, and release
-contracts before the service beta.
+OpenE2EE Relay provides managed encrypted delivery for the OpenE2EE Signal
+Protocol SDK. This public repository lets developers inspect the command,
+config, credential, and release contracts.
 
 ## Local start
 
@@ -24,9 +24,8 @@ The initializer needs no login, card, or backend. It writes:
 - `open-e2ee-local.mjs`, which runs real protocol and cryptography with the
   SDK's development-only in-memory adapters.
 
-The future `npm create oe@latest` entry point initializes the same files. It also
-runs the local encrypted round trip. OpenE2EE will publish it with the service
-beta.
+`npm create oe@latest` initializes the same files and runs the local encrypted
+round trip.
 
 ## Command contract
 
@@ -68,15 +67,14 @@ revision. A console-first project or a revision conflict fails closed.
 `@open-e2ee/cli` contains a small Node launcher and six optional native packages:
 macOS, Linux, and Windows on arm64 and x64. Installation does not run a
 postinstall download. The release workflow cross-compiles the Go command, creates
-checksums, and creates GitHub build-provenance attestations. Verify a published
-artifact with:
+checksums and a CycloneDX SBOM, and creates GitHub build-provenance attestations
+for every release artifact. Verify a published artifact with:
 
 ```bash
 gh attestation verify PATH_TO_ARTIFACT -R open-e2ee/cli
 ```
 
-The repository also contains a HEAD-only Homebrew formula. Stable npm and
-Homebrew distribution remains gated on the coordinated public beta release.
+The repository also contains a Homebrew formula for the native command.
 
 ## Development
 
