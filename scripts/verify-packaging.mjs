@@ -25,6 +25,48 @@ for (const relative of required) {
 const cli = JSON.parse(
   await readFile(path.join(root, "packages/cli/package.json"), "utf8"),
 );
+const workspace = JSON.parse(
+  await readFile(path.join(root, "package.json"), "utf8"),
+);
+const initializer = JSON.parse(
+  await readFile(path.join(root, "packages/create-oe/package.json"), "utf8"),
+);
+const packageNames = [
+  "cli",
+  "create-oe",
+  "cli-darwin-arm64",
+  "cli-darwin-x64",
+  "cli-linux-arm64",
+  "cli-linux-x64",
+  "cli-win32-arm64",
+  "cli-win32-x64",
+];
+for (const packageName of packageNames) {
+  const manifest = JSON.parse(
+    await readFile(
+      path.join(root, "packages", packageName, "package.json"),
+      "utf8",
+    ),
+  );
+  if (manifest.version !== workspace.version) {
+    throw new Error(
+      `${manifest.name} version ${manifest.version} does not match workspace ${workspace.version}`,
+    );
+  }
+}
+if (initializer.dependencies?.["@open-e2ee/cli"] !== workspace.version) {
+  throw new Error("create-oe must depend on the exact coordinated CLI version");
+}
+const sdkVersion =
+  workspace.devDependencies?.["@open-e2ee/signal-protocol-sdk"];
+if (
+  initializer.dependencies?.["@open-e2ee/signal-protocol-sdk"] !==
+  `^${sdkVersion}`
+) {
+  throw new Error(
+    "create-oe and the release workspace must use one SDK release",
+  );
+}
 if (cli.scripts?.postinstall) {
   throw new Error("@open-e2ee/cli must not use a postinstall download");
 }

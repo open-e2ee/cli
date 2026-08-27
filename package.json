@@ -1,7 +1,7 @@
 {
   "name": "open-e2ee-cli-workspace",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "format:check": "prettier --check .",
@@ -12,7 +12,7 @@
     "test": "npm run package:verify && node --test ./scripts/*.test.mjs"
   },
   "devDependencies": {
-    "@open-e2ee/signal-protocol-sdk": "0.4.0",
+    "@open-e2ee/signal-protocol-sdk": "1.0.0",
     "prettier": "3.9.6"
   },
   "engines": {
