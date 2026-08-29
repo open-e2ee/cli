@@ -154,6 +154,57 @@ func TestMutationsCarryBearerAndIdempotencyHeaders(t *testing.T) {
 	}
 }
 
+func TestNotificationConfigurationUsesExactEnvironmentAndVersion(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		calls++
+		if request.URL.Path != "/v1/projects/chat/notifications" {
+			t.Fatalf("unexpected path %q", request.URL.Path)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet {
+			if request.URL.Query().Get("environment") != "development" {
+				t.Fatalf("environment query was lost: %s", request.URL.RawQuery)
+			}
+			json.NewEncoder(response).Encode(NotificationConfiguration{
+				AllowedProfiles:      []NotificationProfile{NotificationBackgroundOnly},
+				ConfigurationVersion: 4, Environment: "development", Providers: []string{"apns"},
+			})
+			return
+		}
+		if request.Header.Get("Idempotency-Key") != "notification-operation" {
+			t.Fatal("notification mutation lost its idempotency key")
+		}
+		var input NotificationConfigurationRequest
+		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
+			t.Fatal(err)
+		}
+		if input.ExpectedConfigurationVersion != 4 || input.Environment != "development" || len(input.AllowedProfiles) != 2 {
+			t.Fatalf("unexpected notification request: %#v", input)
+		}
+		json.NewEncoder(response).Encode(NotificationConfiguration{
+			AllowedProfiles: input.AllowedProfiles, ConfigurationVersion: 5,
+			Environment: "development", Providers: []string{"apns"},
+		})
+	}))
+	defer server.Close()
+	client, err := New(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := client.Notifications(context.Background(), CredentialRequest{}, "chat", "development")
+	if err != nil || current.ConfigurationVersion != 4 {
+		t.Fatalf("notification read failed: %#v %v", current, err)
+	}
+	updated, err := client.ConfigureNotifications(context.Background(), CredentialRequest{OperationID: "notification-operation"}, "chat", NotificationConfigurationRequest{
+		AllowedProfiles: []NotificationProfile{NotificationBackgroundOnly, NotificationVisibleAlert},
+		Environment:     "development", ExpectedConfigurationVersion: current.ConfigurationVersion,
+	})
+	if err != nil || updated.ConfigurationVersion != 5 || calls != 2 {
+		t.Fatalf("notification write failed: %#v calls=%d %v", updated, calls, err)
+	}
+}
+
 func TestPostWithoutIdempotencyKeyIsNotRetried(t *testing.T) {
 	var calls atomic.Int32
 	var server *httptest.Server

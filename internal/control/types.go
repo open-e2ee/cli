@@ -12,6 +12,8 @@ type API interface {
 	Plan(context.Context, CredentialRequest, PlanRequest) (Plan, error)
 	Deploy(context.Context, CredentialRequest, DeployRequest) (Deployment, error)
 	GetProject(context.Context, CredentialRequest, string) (Project, error)
+	Notifications(context.Context, CredentialRequest, string, string) (NotificationConfiguration, error)
+	ConfigureNotifications(context.Context, CredentialRequest, string, NotificationConfigurationRequest) (NotificationConfiguration, error)
 }
 
 type CredentialRequest struct {
@@ -114,4 +116,25 @@ type ProjectEnvironment struct {
 	DeliveryTtlSeconds         int    `json:"deliveryTtlSeconds"`
 	RelayURL                   string `json:"relayUrl"`
 	Revision                   string `json:"revision"`
+}
+
+type NotificationProfile string
+
+const (
+	NotificationBackgroundOnly NotificationProfile = "background-only"
+	NotificationVisibleAlert   NotificationProfile = "visible-alert"
+	NotificationNSEVisible     NotificationProfile = "nse-visible"
+)
+
+type NotificationConfiguration struct {
+	AllowedProfiles      []NotificationProfile `json:"allowedProfiles"`
+	ConfigurationVersion int                   `json:"configurationVersion"`
+	Environment          string                `json:"environment"`
+	Providers            []string              `json:"providers"`
+}
+
+type NotificationConfigurationRequest struct {
+	AllowedProfiles              []NotificationProfile `json:"allowedProfiles"`
+	Environment                  string                `json:"environment"`
+	ExpectedConfigurationVersion int                   `json:"expectedConfigurationVersion"`
 }

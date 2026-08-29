@@ -37,6 +37,7 @@ oe plan       show the production configuration change without applying it
 oe deploy     complete the production card gate, deploy, and install its Relay connection
 oe doctor     check project, environment, connection, credentials, and control-plane health
 oe project    inspect or select a project
+oe notifications stage and verify best-effort notification profiles
 ```
 
 Global `--json` emits one final JSON document. `--json-stream` emits
@@ -69,6 +70,36 @@ does not select a Relay hostname or pair an endpoint with a second key.
 `oe deploy` writes `.env.production.local`. If the hosting provider does not
 read that file, install its `OPEN_E2EE_RELAY_URL` value in the production build
 environment. The application source stays unchanged.
+
+## iOS notification workflow
+
+Push is a best-effort wake. The durable Relay mailbox, authenticated pull, and
+acknowledgement are delivery authority.
+
+```bash
+oe notifications setup ios --profile background-only
+oe notifications setup ios --profile visible-alert
+oe notifications add-nse
+oe notifications verify ios
+oe notifications verify ios --app-bundle ./path/to/App.app
+oe notifications apple-filtering-request
+```
+
+`setup ios` supports discretionary background wakes or generic visible alerts.
+It does not put message content, ciphertext, identifiers, or receipt state in a
+provider payload. Expo projects must use a development or native build. Expo Go
+cannot verify remote push or contain a Notification Service Extension.
+
+`add-nse` creates a generic, timeout-safe Notification Service Extension. Expo
+CNG uses `@bacons/apple-targets`; bare React Native receives the same source and
+an exact Xcode target handoff. The extension does not get App Group or Keychain
+access by default and does not decrypt a preview.
+
+Apple's notification-filtering entitlement is separate from an NSE. It permits
+an approved, signed extension to suppress an alert. It does not improve APNs
+transport or guarantee execution. The CLI keeps filtering unavailable until
+Apple approval, signed-build inspection, and physical-device suppression
+evidence all pass. Simulator results are not physical-device evidence.
 
 ## Distribution contract
 

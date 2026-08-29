@@ -187,6 +187,58 @@ func TestDoctorReportsSafeConnectionOriginAndRefusesProjectDrift(t *testing.T) {
 	}
 }
 
+func TestNotificationsSetupStagesLocalAndRemoteProfile(t *testing.T) {
+	directory := initializedProject(t, "notification-chat")
+	if err := os.WriteFile(filepath.Join(directory, "package.json"), []byte(`{"dependencies":{"expo":"55.0.0","expo-notifications":"1.0.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "app.json"), []byte(`{"expo":{"ios":{"bundleIdentifier":"dev.open_e2ee.chat"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := credential.NewMemory()
+	storeCredential(t, store, "project:write")
+	wrote := false
+	api := &fakeAPI{
+		notifications: func(_ context.Context, request control.CredentialRequest, project, environment string) (control.NotificationConfiguration, error) {
+			if request.AccessToken == "" || project != "notification-chat" || environment != "development" {
+				t.Fatalf("notification read lost authority: %#v %s %s", request, project, environment)
+			}
+			return control.NotificationConfiguration{
+				AllowedProfiles:      []control.NotificationProfile{control.NotificationBackgroundOnly},
+				ConfigurationVersion: 2, Environment: "development", Providers: []string{"apns"},
+			}, nil
+		},
+		configureNotifications: func(_ context.Context, request control.CredentialRequest, project string, input control.NotificationConfigurationRequest) (control.NotificationConfiguration, error) {
+			wrote = true
+			if request.OperationID == "" || project != "notification-chat" || input.Environment != "development" || input.ExpectedConfigurationVersion != 2 || !hasNotificationProfile(input.AllowedProfiles, control.NotificationVisibleAlert) {
+				t.Fatalf("notification write lost concurrency contract: %#v %#v", request, input)
+			}
+			return control.NotificationConfiguration{AllowedProfiles: input.AllowedProfiles, ConfigurationVersion: 3, Environment: "development", Providers: []string{"apns"}}, nil
+		},
+	}
+	var stdout bytes.Buffer
+	exit := Run(context.Background(), []string{"--json", "notifications", "setup", "ios", "--profile", "visible-alert"}, Dependencies{
+		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
+	})
+	if exit != 0 || !wrote || !strings.Contains(stdout.String(), "best-effort wake") {
+		t.Fatalf("notification setup failed: wrote=%v output=%s", wrote, stdout.String())
+	}
+	configured, err := os.ReadFile(filepath.Join(directory, "app.json"))
+	if err != nil || !strings.Contains(string(configured), "remote-notification") || !strings.Contains(string(configured), "expo-notifications") {
+		t.Fatalf("local Expo configuration was not staged: %s %v", configured, err)
+	}
+}
+
+func TestNotificationsFilteringRequestDoesNotClaimActivation(t *testing.T) {
+	var stdout bytes.Buffer
+	exit := Run(context.Background(), []string{"--json", "notifications", "apple-filtering-request"}, Dependencies{
+		API: &fakeAPI{}, Store: credential.NewMemory(), Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: t.TempDir(),
+	})
+	if exit != 0 || !strings.Contains(stdout.String(), "does not improve APNs delivery") || !strings.Contains(stdout.String(), "physical-device suppression evidence") {
+		t.Fatalf("filtering guidance is unsafe or incomplete: %s", stdout.String())
+	}
+}
+
 func TestDeployOpensCardSetupBeforeProductionMutation(t *testing.T) {
 	directory := initializedProject(t, "billing-chat")
 	store := credential.NewMemory()
@@ -450,14 +502,16 @@ func storeCredential(t *testing.T, store credential.Store, scopes ...string) {
 }
 
 type fakeAPI struct {
-	startAuthorization   func(context.Context, control.AuthorizationRequest) (control.Authorization, error)
-	pollAuthorization    func(context.Context, control.Authorization) (control.Token, error)
-	refreshAuthorization func(context.Context, string) (control.Token, error)
-	bootstrapDevelopment func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error)
-	activation           func(context.Context, control.CredentialRequest, string) (control.Activation, error)
-	plan                 func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error)
-	deploy               func(context.Context, control.CredentialRequest, control.DeployRequest) (control.Deployment, error)
-	getProject           func(context.Context, control.CredentialRequest, string) (control.Project, error)
+	startAuthorization     func(context.Context, control.AuthorizationRequest) (control.Authorization, error)
+	pollAuthorization      func(context.Context, control.Authorization) (control.Token, error)
+	refreshAuthorization   func(context.Context, string) (control.Token, error)
+	bootstrapDevelopment   func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error)
+	activation             func(context.Context, control.CredentialRequest, string) (control.Activation, error)
+	plan                   func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error)
+	deploy                 func(context.Context, control.CredentialRequest, control.DeployRequest) (control.Deployment, error)
+	getProject             func(context.Context, control.CredentialRequest, string) (control.Project, error)
+	notifications          func(context.Context, control.CredentialRequest, string, string) (control.NotificationConfiguration, error)
+	configureNotifications func(context.Context, control.CredentialRequest, string, control.NotificationConfigurationRequest) (control.NotificationConfiguration, error)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -514,4 +568,16 @@ func (f *fakeAPI) GetProject(ctx context.Context, credential control.CredentialR
 		return control.Project{}, errors.New("unexpected GetProject")
 	}
 	return f.getProject(ctx, credential, project)
+}
+func (f *fakeAPI) Notifications(ctx context.Context, credential control.CredentialRequest, project, environment string) (control.NotificationConfiguration, error) {
+	if f.notifications == nil {
+		return control.NotificationConfiguration{}, errors.New("unexpected Notifications")
+	}
+	return f.notifications(ctx, credential, project, environment)
+}
+func (f *fakeAPI) ConfigureNotifications(ctx context.Context, credential control.CredentialRequest, project string, request control.NotificationConfigurationRequest) (control.NotificationConfiguration, error) {
+	if f.configureNotifications == nil {
+		return control.NotificationConfiguration{}, errors.New("unexpected ConfigureNotifications")
+	}
+	return f.configureNotifications(ctx, credential, project, request)
 }
