@@ -57,6 +57,30 @@ func TestLoadAcceptsJSONC(t *testing.T) {
 	}
 }
 
+func TestEnvironmentUsesOneRelayConnectionURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), Filename)
+	contents := `{
+  "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
+  "project": "url-only-chat",
+  "writer": "config",
+  "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d" },
+  "environments": {
+    "development": { "relayUrl": "https://development.relay.open-e2ee.dev/v1/connection/public-locator" },
+    "production": { "relayUrl": "https://relay.open-e2ee.dev/v1/connection/public-locator" }
+  }
+}`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	value, err := Load(path)
+	if err != nil {
+		t.Fatalf("one Relay connection URL was rejected: %v", err)
+	}
+	if value.Environments["development"].RelayURL == "" || value.Environments["production"].RelayURL == "" {
+		t.Fatal("Relay connection URL was not retained")
+	}
+}
+
 func TestValidateRejectsUnknownEnvironments(t *testing.T) {
 	value := New("safe-chat")
 	value.Environments["staging"] = Environment{}
