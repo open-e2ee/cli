@@ -17,10 +17,11 @@ const service = "dev.open-e2ee.cli"
 var ErrNotFound = errors.New("credential not found")
 
 type Credential struct {
-	AccessToken string   `json:"accessToken"`
-	Scopes      []string `json:"scopes"`
-	ExpiresAt   string   `json:"expiresAt,omitempty"`
-	Source      string   `json:"-"`
+	AccessToken  string   `json:"accessToken"`
+	ExpiresAt    string   `json:"expiresAt,omitempty"`
+	RefreshToken string   `json:"refreshToken,omitempty"`
+	Scopes       []string `json:"scopes"`
+	Source       string   `json:"-"`
 }
 
 type Store interface {
@@ -99,8 +100,8 @@ func Profile(controlURL string) (string, error) {
 
 func RequireScope(value Credential, scope string) error {
 	if len(value.Scopes) == 0 {
-		// The control API remains authoritative. Older interactive credentials can
-		// omit local scope metadata and are still checked by the server.
+		// The control API remains authoritative. Interactive WorkOS credentials do
+		// not carry local scope metadata and are still checked by the server.
 		return nil
 	}
 	for _, candidate := range value.Scopes {

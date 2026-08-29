@@ -23,12 +23,11 @@ import (
 	"github.com/open-e2ee/cli/internal/credential"
 	"github.com/open-e2ee/cli/internal/output"
 	"github.com/open-e2ee/cli/internal/projectlock"
-	"golang.org/x/term"
 )
 
-const defaultControlURL = "https://control.relay.open-e2ee.dev"
+const defaultControlURL = "https://console.open-e2ee.dev/api/cli"
 
-var commands = []string{"init", "login", "dev", "deploy", "plan", "doctor", "project", "provider", "secret"}
+var commands = []string{"init", "login", "dev", "deploy", "plan", "doctor", "project"}
 
 type Dependencies struct {
 	API        control.API
@@ -46,6 +45,7 @@ type Dependencies struct {
 
 type runner struct {
 	api         control.API
+	http        *http.Client
 	store       credential.Store
 	in          io.Reader
 	out         *output.Writer
@@ -93,12 +93,18 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 	if dependencies.Getenv == nil {
 		dependencies.Getenv = os.Getenv
 	}
+	if dependencies.HTTP == nil {
+		dependencies.HTTP = &http.Client{Timeout: 20 * time.Second}
+	}
 	if dependencies.WorkingDir == "" {
 		dependencies.WorkingDir, err = os.Getwd()
 		if err != nil {
 			fmt.Fprintf(dependencies.Err, "error: determine working directory: %v\n", err)
 			return 1
 		}
+	}
+	if !global.environmentExplicit {
+		global.environment = defaultEnvironment(command, dependencies.WorkingDir)
 	}
 	if err := validateControlURL(global.controlURL); err != nil {
 		fmt.Fprintf(dependencies.Err, "error: %v\n", err)
@@ -113,7 +119,7 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 		}
 	}
 	r := &runner{
-		api: api, store: dependencies.Store, in: dependencies.In,
+		api: api, http: dependencies.HTTP, store: dependencies.Store, in: dependencies.In,
 		out: output.New(global.mode, dependencies.Out), errOut: dependencies.Err,
 		openURL: dependencies.OpenURL, sleep: dependencies.Sleep, now: dependencies.Now,
 		getenv: dependencies.Getenv, directory: dependencies.WorkingDir,
@@ -149,10 +155,6 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 		return r.doctor(ctx, args)
 	case "project":
 		return r.project(ctx, args)
-	case "provider":
-		return r.provider(ctx, args)
-	case "secret":
-		return r.secret(ctx, args)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
@@ -160,16 +162,14 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 
 func (r *runner) commandHelp(command string) error {
 	usage := map[string]string{
-		"init":     "oe init [--directory PATH] [--name PROJECT] [--force]",
-		"login":    "oe login [--timeout DURATION]",
-		"dev":      "oe dev [--timeout DURATION] [--no-wait]",
-		"plan":     "oe plan",
-		"deploy":   "oe deploy [--confirm]",
-		"doctor":   "oe doctor",
-		"project":  "oe project <list|show|select PROJECT>",
-		"provider": "oe provider <list|set --kind KIND [--issuer URL]>",
-		"secret":   "oe secret <list|set NAME [--from-env VARIABLE]|delete NAME>",
-		"version":  "oe version",
+		"init":    "oe init [--directory PATH] [--name PROJECT] [--force]",
+		"login":   "oe login [--timeout DURATION]",
+		"dev":     "oe dev [--timeout DURATION] [--no-wait]",
+		"plan":    "oe plan",
+		"deploy":  "oe deploy [--confirm]",
+		"doctor":  "oe doctor",
+		"project": "oe project <show|select PROJECT>",
+		"version": "oe version",
 	}
 	text, ok := usage[command]
 	if !ok {
@@ -243,13 +243,11 @@ func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (c
 	if err != nil {
 		return credential.Credential{}, err
 	}
-	authorization, err := r.api.StartAuthorization(ctx, control.AuthorizationRequest{Scopes: []string{
-		"project:read", "project:write", "provider:write", "secret:write", "deploy:write",
-	}})
+	authorization, err := r.api.StartAuthorization(ctx, control.AuthorizationRequest{})
 	if err != nil {
 		return credential.Credential{}, err
 	}
-	if authorization.ID == "" || authorization.VerificationURL == "" || authorization.UserCode == "" {
+	if authorization.DeviceCode == "" || authorization.VerificationURL == "" || authorization.UserCode == "" {
 		return credential.Credential{}, errors.New("control API returned an incomplete browser authorization")
 	}
 	_ = r.out.Progress("login", fmt.Sprintf("Open %s and enter code %s.", authorization.VerificationURL, authorization.UserCode), map[string]any{
@@ -262,10 +260,14 @@ func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (c
 	if interval < time.Second {
 		interval = 2 * time.Second
 	}
+	authorizationLifetime := time.Duration(authorization.ExpiresInSeconds) * time.Second
+	if authorizationLifetime > 0 && authorizationLifetime < timeout {
+		timeout = authorizationLifetime
+	}
 	loginCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for {
-		token, err := r.api.PollAuthorization(loginCtx, authorization.ID)
+		token, err := r.api.PollAuthorization(loginCtx, authorization)
 		if err != nil {
 			return credential.Credential{}, err
 		}
@@ -273,12 +275,18 @@ func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (c
 			if token.AccessToken == "" {
 				return credential.Credential{}, errors.New("browser authorization completed without a credential")
 			}
-			value := credential.Credential{AccessToken: token.AccessToken, Scopes: token.Scopes, ExpiresAt: token.ExpiresAt}
+			value := credential.Credential{
+				AccessToken: token.AccessToken, ExpiresAt: token.ExpiresAt,
+				RefreshToken: token.RefreshToken,
+			}
 			if err := r.store.Set(profile, value); err != nil {
 				return credential.Credential{}, err
 			}
 			value.Source = "keychain"
 			return value, nil
+		}
+		if token.RetryAfterSeconds > 0 {
+			interval = time.Duration(token.RetryAfterSeconds) * time.Second
 		}
 		if err := r.sleep(loginCtx, interval); err != nil {
 			return credential.Credential{}, fmt.Errorf("login did not complete: %w", err)
@@ -313,8 +321,12 @@ func (r *runner) dev(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	policy, err := controlPolicy(value, "development")
+	if err != nil {
+		return err
+	}
 	bootstrap, err := r.api.BootstrapDevelopment(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.BootstrapRequest{
-		ProjectSlug: value.Project, Writer: value.Writer,
+		Policy: policy, ProjectSlug: value.Project, Writer: value.Writer,
 	})
 	if err != nil {
 		return err
@@ -322,16 +334,17 @@ func (r *runner) dev(ctx context.Context, args []string) error {
 	if bootstrap.Writer != "config" || bootstrap.ProjectSlug != value.Project || bootstrap.Environment != "development" {
 		return errors.New("control API returned a bootstrap for a different project, writer, or environment")
 	}
-	if bootstrap.DevelopmentPublicKey == "" || bootstrap.ProductionPublicKey == "" {
-		return errors.New("control API returned incomplete publishable configuration")
+	if bootstrap.DevelopmentRelayURL == "" {
+		return errors.New("control API returned an incomplete development Relay connection")
 	}
 	development := value.Environments["development"]
-	development.PublishableKey = bootstrap.DevelopmentPublicKey
+	development.RelayURL = bootstrap.DevelopmentRelayURL
 	value.Environments["development"] = development
-	production := value.Environments["production"]
-	production.PublishableKey = bootstrap.ProductionPublicKey
-	value.Environments["production"] = production
+	value.SelectedEnvironment = "development"
 	if err := config.Write(path, value); err != nil {
+		return err
+	}
+	if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", bootstrap.DevelopmentRelayURL); err != nil {
 		return err
 	}
 	_ = r.out.Progress("dev", "Managed development is ready. Connect the first device.", map[string]any{"environment": "development"})
@@ -365,9 +378,16 @@ func (r *runner) plan(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	plan, err := r.api.Plan(ctx, control.CredentialRequest{AccessToken: access.AccessToken}, control.PlanRequest{
-		ProjectSlug: value.Project, Environment: r.environment, Writer: value.Writer,
-		ExpectedRevision: project.Revision, Config: value,
+	policy, err := controlPolicy(value, r.environment)
+	if err != nil {
+		return err
+	}
+	operation, err := operationID()
+	if err != nil {
+		return err
+	}
+	plan, err := r.api.Plan(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.PlanRequest{
+		Environment: r.environment, Policy: policy, ProjectSlug: value.Project, Writer: value.Writer,
 	})
 	if err != nil {
 		return err
@@ -394,14 +414,22 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	lock, err := projectlock.Acquire(ctx, filepath.Dir(mustConfigPath(r.directory)))
+	configPath := mustConfigPath(r.directory)
+	lock, err := projectlock.Acquire(ctx, filepath.Dir(configPath))
 	if err != nil {
 		return err
 	}
 	defer lock.Release()
-	plan, err := r.api.Plan(ctx, control.CredentialRequest{AccessToken: access.AccessToken}, control.PlanRequest{
-		ProjectSlug: value.Project, Environment: "production", Writer: value.Writer,
-		ExpectedRevision: project.Revision, Config: value,
+	policy, err := controlPolicy(value, "production")
+	if err != nil {
+		return err
+	}
+	planOperation, err := operationID()
+	if err != nil {
+		return err
+	}
+	plan, err := r.api.Plan(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: planOperation}, control.PlanRequest{
+		Environment: "production", Policy: policy, ProjectSlug: value.Project, Writer: value.Writer,
 	})
 	if err != nil {
 		return err
@@ -438,13 +466,28 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 		return err
 	}
 	deployment, err := r.api.Deploy(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.DeployRequest{
-		PlanID: plan.ID, Writer: value.Writer, ExpectedRevision: plan.ExpectedRevision,
+		ExpectedRevision: plan.ExpectedRevision, PlanID: plan.ID, Policy: policy,
+		ProjectSlug: value.Project, Writer: value.Writer,
 	})
 	if err != nil {
 		return err
 	}
-	return r.out.Success("deploy", "Production configuration deployed.", map[string]any{
-		"deploymentId": deployment.ID, "revision": deployment.Revision, "status": deployment.Status,
+	if deployment.RelayURL == "" {
+		return errors.New("control API returned an incomplete production Relay connection")
+	}
+	production := value.Environments["production"]
+	production.RelayURL = deployment.RelayURL
+	value.Environments["production"] = production
+	value.SelectedEnvironment = "production"
+	if err := config.Write(configPath, value); err != nil {
+		return err
+	}
+	if err := writeRelayEnvironment(filepath.Dir(configPath), ".env.production.local", deployment.RelayURL); err != nil {
+		return err
+	}
+	return r.out.Success("deploy", "Production Relay is active. Install OPEN_E2EE_RELAY_URL from .env.production.local in the hosting environment.", map[string]any{
+		"configurationFile": ".env.production.local", "deploymentId": deployment.ID,
+		"revision": deployment.Revision, "status": deployment.Status, "variable": "OPEN_E2EE_RELAY_URL",
 	})
 }
 
@@ -453,27 +496,70 @@ func (r *runner) doctor(ctx context.Context, args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	checks := map[string]any{"config": "ok", "control": "ok", "credential": "ok", "telemetry": "disabled"}
-	if _, _, err := r.loadConfig(); err != nil {
-		checks["config"] = err.Error()
+	checks := map[string]any{"config": "ok", "control": "ok", "credential": "ok", "relay": "ok", "telemetry": "disabled"}
+	_, value, err := r.loadConfig()
+	if err != nil {
+		return fmt.Errorf("doctor found a problem: %w", err)
+	}
+	local := value.Environments[r.environment].RelayURL
+	if local == "" {
+		command := "oe dev"
+		if r.environment == "production" {
+			command = "oe deploy"
+		}
+		return fmt.Errorf("doctor found a problem: %s Relay connection is not configured; run %s", r.environment, command)
 	}
 	if err := r.api.Health(ctx); err != nil {
-		checks["control"] = err.Error()
+		return fmt.Errorf("doctor found a problem: control API: %w", err)
 	}
-	if _, err := r.access(ctx, "project:read", false); err != nil {
-		checks["credential"] = err.Error()
+	access, err := r.access(ctx, "project:read", false)
+	if err != nil {
+		return fmt.Errorf("doctor found a problem: credential: %w", err)
 	}
-	for _, value := range checks {
-		if text, ok := value.(string); ok && text != "ok" && text != "disabled" {
-			return fmt.Errorf("doctor found a problem: %s", text)
+	project, err := r.api.GetProject(ctx, control.CredentialRequest{AccessToken: access.AccessToken}, value.Project)
+	if err != nil {
+		return fmt.Errorf("doctor found a problem: project authority: %w", err)
+	}
+	expected := ""
+	if project.Development != nil {
+		expected = project.Development.RelayURL
+	}
+	if r.environment == "production" {
+		expected = ""
+		if project.Production != nil {
+			expected = project.Production.RelayURL
 		}
 	}
+	if expected == "" {
+		return fmt.Errorf("doctor found a problem: %s is not active", r.environment)
+	}
+	if expected != local {
+		return fmt.Errorf("doctor found a problem: local %s Relay connection is stale or belongs to another project; select the project again", r.environment)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, local, nil)
+	if err != nil {
+		return fmt.Errorf("doctor found a problem: Relay connection is invalid")
+	}
+	request.Header.Set("Accept", "application/json")
+	response, err := r.http.Do(request)
+	if err != nil {
+		return fmt.Errorf("doctor found a problem: Relay connection is unreachable")
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("doctor found a problem: Relay connection returned status %d", response.StatusCode)
+	}
+	origin, _ := url.Parse(local)
+	checks["project"] = value.Project
+	checks["environment"] = r.environment
+	checks["configurationSource"] = config.Filename
+	checks["relayOrigin"] = origin.Scheme + "://" + origin.Host
 	return r.out.Success("doctor", "All checks passed. CLI telemetry is disabled.", checks)
 }
 
 func (r *runner) project(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: oe project <list|show|select>")
+		return errors.New("usage: oe project <show|select>")
 	}
 	access, err := r.access(ctx, "project:read", false)
 	if err != nil {
@@ -481,12 +567,6 @@ func (r *runner) project(ctx context.Context, args []string) error {
 	}
 	request := control.CredentialRequest{AccessToken: access.AccessToken}
 	switch args[0] {
-	case "list":
-		projects, err := r.api.ListProjects(ctx, request)
-		if err != nil {
-			return err
-		}
-		return r.out.Success("project", fmt.Sprintf("Found %d project(s).", len(projects)), map[string]any{"projects": projects})
 	case "show":
 		_, value, err := r.loadConfig()
 		if err != nil {
@@ -496,7 +576,7 @@ func (r *runner) project(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return r.out.Success("project", "Project loaded.", map[string]any{"project": project})
+		return r.out.Success("project", "Project loaded.", map[string]any{"project": projectSummary(project)})
 	case "select":
 		if len(args) != 2 {
 			return errors.New("usage: oe project select <project>")
@@ -517,12 +597,26 @@ func (r *runner) project(ctx context.Context, args []string) error {
 		value.Project = project.Slug
 		value.Writer = project.Writer
 		development := value.Environments["development"]
-		development.PublishableKey = project.DevelopmentPublishableKey
+		if project.Development != nil {
+			development.RelayURL = project.Development.RelayURL
+		} else {
+			development.RelayURL = ""
+		}
 		value.Environments["development"] = development
 		production := value.Environments["production"]
-		production.PublishableKey = project.ProductionPublishableKey
+		if project.Production != nil {
+			production.RelayURL = project.Production.RelayURL
+		} else {
+			production.RelayURL = ""
+		}
 		value.Environments["production"] = production
 		if err := config.Write(path, value); err != nil {
+			return err
+		}
+		if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", development.RelayURL); err != nil {
+			return err
+		}
+		if err := writeRelayEnvironment(filepath.Dir(path), ".env.production.local", production.RelayURL); err != nil {
 			return err
 		}
 		return r.out.Success("project", "Selected project "+project.Slug+".", map[string]any{"project": project.Slug})
@@ -531,217 +625,11 @@ func (r *runner) project(ctx context.Context, args []string) error {
 	}
 }
 
-func (r *runner) provider(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: oe provider <list|set>")
+func projectSummary(project control.Project) map[string]string {
+	return map[string]string{
+		"slug":   project.Slug,
+		"writer": project.Writer,
 	}
-	_, value, err := r.loadConfig()
-	if err != nil {
-		return err
-	}
-	switch args[0] {
-	case "list":
-		access, err := r.access(ctx, "project:read", false)
-		if err != nil {
-			return err
-		}
-		providers, err := r.api.ListProviders(ctx, control.CredentialRequest{AccessToken: access.AccessToken}, value.Project)
-		if err != nil {
-			return err
-		}
-		return r.out.Success("provider", fmt.Sprintf("Found %d provider(s).", len(providers)), map[string]any{"providers": providers})
-	case "set":
-		flags := newFlags("provider set")
-		kind := flags.String("kind", "", "device-owned, clerk, firebase, oidc, or custom-token")
-		issuer := flags.String("issuer", "", "provider issuer")
-		if err := flags.Parse(args[1:]); err != nil {
-			return err
-		}
-		if *kind == "" {
-			return errors.New("--kind is required")
-		}
-		if err := validateProvider(*kind, *issuer); err != nil {
-			return err
-		}
-		access, err := r.access(ctx, "provider:write", false)
-		if err != nil {
-			return err
-		}
-		operation, err := operationID()
-		if err != nil {
-			return err
-		}
-		provider, err := r.api.SetProvider(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.ProviderRequest{
-			ProjectSlug: value.Project, Environment: r.environment, Kind: *kind, Issuer: *issuer,
-		})
-		if err != nil {
-			return err
-		}
-		return r.out.Success("provider", "Identity provider updated.", map[string]any{"provider": provider})
-	default:
-		return fmt.Errorf("unknown provider command %q", args[0])
-	}
-}
-
-func (r *runner) secret(ctx context.Context, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: oe secret <list|set|delete>")
-	}
-	_, value, err := r.loadConfig()
-	if err != nil {
-		return err
-	}
-	switch args[0] {
-	case "list":
-		access, err := r.access(ctx, "project:read", false)
-		if err != nil {
-			return err
-		}
-		secrets, err := r.api.ListSecrets(ctx, control.CredentialRequest{AccessToken: access.AccessToken}, value.Project)
-		if err != nil {
-			return err
-		}
-		return r.out.Success("secret", fmt.Sprintf("Found %d secret name(s). Values are never returned.", len(secrets)), map[string]any{"secrets": secrets})
-	case "set":
-		name, fromEnv, err := parseSecretSet(args[1:])
-		if err != nil {
-			return err
-		}
-		if name == "" {
-			return errors.New("usage: oe secret set <name> [--from-env VARIABLE]")
-		}
-		if !validSecretName(name) {
-			return errors.New("secret name must use uppercase letters, digits, and single underscores")
-		}
-		secretValue, err := r.readSecret(fromEnv)
-		if err != nil {
-			return err
-		}
-		access, err := r.access(ctx, "secret:write", false)
-		if err != nil {
-			return err
-		}
-		operation, err := operationID()
-		if err != nil {
-			return err
-		}
-		err = r.api.SetSecret(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.SecretRequest{
-			ProjectSlug: value.Project, Environment: r.environment, Name: name, Value: secretValue,
-		})
-		if err != nil {
-			return redactError(err, secretValue)
-		}
-		return r.out.Success("secret", "Secret stored. Its value was not written or printed.", map[string]any{"name": name, "environment": r.environment})
-	case "delete":
-		if len(args) != 2 {
-			return errors.New("usage: oe secret delete <name>")
-		}
-		if !validSecretName(args[1]) {
-			return errors.New("secret name must use uppercase letters, digits, and single underscores")
-		}
-		access, err := r.access(ctx, "secret:write", false)
-		if err != nil {
-			return err
-		}
-		operation, err := operationID()
-		if err != nil {
-			return err
-		}
-		if err := r.api.DeleteSecret(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, value.Project, args[1]); err != nil {
-			return err
-		}
-		return r.out.Success("secret", "Secret deleted.", map[string]any{"name": args[1], "environment": r.environment})
-	default:
-		return fmt.Errorf("unknown secret command %q", args[0])
-	}
-}
-
-func (r *runner) readSecret(fromEnvironment string) (string, error) {
-	if fromEnvironment != "" {
-		value := r.getenv(fromEnvironment)
-		if value == "" {
-			return "", fmt.Errorf("environment variable %s is empty", fromEnvironment)
-		}
-		return value, nil
-	}
-	if file, ok := r.in.(*os.File); ok && term.IsTerminal(int(file.Fd())) {
-		fmt.Fprint(r.errOut, "Secret value: ")
-		value, err := term.ReadPassword(int(file.Fd()))
-		fmt.Fprintln(r.errOut)
-		if err != nil {
-			return "", err
-		}
-		if len(value) == 0 {
-			return "", errors.New("secret value is empty")
-		}
-		return string(value), nil
-	}
-	value, err := io.ReadAll(io.LimitReader(r.in, 1<<20))
-	if err != nil {
-		return "", err
-	}
-	trimmed := strings.TrimRight(string(value), "\r\n")
-	if trimmed == "" {
-		return "", errors.New("secret value is empty")
-	}
-	return trimmed, nil
-}
-
-func parseSecretSet(args []string) (string, string, error) {
-	var name string
-	var fromEnvironment string
-	for index := 0; index < len(args); index++ {
-		switch args[index] {
-		case "--from-env":
-			if index+1 >= len(args) {
-				return "", "", errors.New("--from-env needs a value")
-			}
-			fromEnvironment = args[index+1]
-			index++
-		default:
-			if strings.HasPrefix(args[index], "-") {
-				return "", "", fmt.Errorf("unknown secret set flag %q", args[index])
-			}
-			if name != "" {
-				return "", "", errors.New("secret set accepts one name")
-			}
-			name = args[index]
-		}
-	}
-	return name, fromEnvironment, nil
-}
-
-func validateProvider(kind, issuer string) error {
-	switch kind {
-	case "device-owned":
-		if issuer != "" {
-			return errors.New("device-owned identity does not use --issuer")
-		}
-		return nil
-	case "clerk", "firebase", "oidc", "custom-token":
-		if issuer == "" {
-			return fmt.Errorf("--issuer is required for %s", kind)
-		}
-		parsed, err := url.Parse(issuer)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
-			return errors.New("provider issuer must be an absolute HTTPS URL")
-		}
-		return nil
-	default:
-		return fmt.Errorf("unsupported provider kind %q", kind)
-	}
-}
-
-func validSecretName(name string) bool {
-	if name == "" || strings.HasPrefix(name, "_") || strings.HasSuffix(name, "_") || strings.Contains(name, "__") {
-		return false
-	}
-	for _, character := range name {
-		if (character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '_' {
-			return false
-		}
-	}
-	return true
 }
 
 func (r *runner) deployContext(ctx context.Context, scope string) (config.Config, control.Project, credential.Credential, error) {
@@ -773,20 +661,39 @@ func validatePlan(plan control.Plan, project control.Project, environment string
 	if plan.Environment != environment {
 		return errors.New("control API returned a plan for a different environment")
 	}
-	if plan.ExpectedRevision != project.Revision {
+	expectedRevision := "0"
+	if environment == "development" && project.Development != nil {
+		expectedRevision = project.Development.Revision
+	}
+	if environment == "production" && project.Production != nil {
+		expectedRevision = project.Production.Revision
+	}
+	if plan.ExpectedRevision != expectedRevision {
 		return errors.New("control API returned a plan for a stale project revision")
 	}
-	if plan.ProjectID != "" && project.ID != "" && plan.ProjectID != project.ID {
+	if plan.ProjectSlug != project.Slug {
 		return errors.New("control API returned a plan for a different project")
 	}
 	return nil
 }
 
-func redactError(err error, secret string) error {
-	if err == nil || secret == "" {
-		return err
+func controlPolicy(value config.Config, environment string) (control.RelayPolicyRequest, error) {
+	policy, err := value.RelayPolicyFor(environment)
+	if err != nil {
+		return control.RelayPolicyRequest{}, err
 	}
-	return errors.New(strings.ReplaceAll(err.Error(), secret, "[redacted]"))
+	attachment, err := config.RetentionSeconds(policy.AttachmentRetention)
+	if err != nil {
+		return control.RelayPolicyRequest{}, err
+	}
+	delivery, err := config.RetentionSeconds(policy.DeliveryRetention)
+	if err != nil {
+		return control.RelayPolicyRequest{}, err
+	}
+	return control.RelayPolicyRequest{
+		AttachmentRetentionSeconds: attachment,
+		DeliveryTtlSeconds:         delivery,
+	}, nil
 }
 
 func (r *runner) access(ctx context.Context, scope string, loginWhenMissing bool) (credential.Credential, error) {
@@ -801,10 +708,40 @@ func (r *runner) access(ctx context.Context, scope string, loginWhenMissing bool
 	if err != nil {
 		return credential.Credential{}, fmt.Errorf("login required: run oe login: %w", err)
 	}
+	if value.Source != "environment" && value.RefreshToken != "" && credentialNeedsRefresh(value, r.now()) {
+		refreshed, refreshErr := r.api.RefreshAuthorization(ctx, value.RefreshToken)
+		if refreshErr != nil {
+			if errors.Is(refreshErr, control.ErrSessionExpired) {
+				_ = r.store.Delete(profile)
+				return credential.Credential{}, errors.New("the WorkOS session expired; run oe login again")
+			}
+			if !credentialIsCurrentlyValid(value, r.now()) {
+				return credential.Credential{}, fmt.Errorf("refresh the WorkOS session: %w", refreshErr)
+			}
+		} else {
+			value = credential.Credential{
+				AccessToken: refreshed.AccessToken, ExpiresAt: refreshed.ExpiresAt,
+				RefreshToken: refreshed.RefreshToken, Source: "keychain",
+			}
+			if err := r.store.Set(profile, value); err != nil {
+				return credential.Credential{}, err
+			}
+		}
+	}
 	if err := credential.RequireScope(value, scope); err != nil {
 		return credential.Credential{}, err
 	}
 	return value, nil
+}
+
+func credentialNeedsRefresh(value credential.Credential, now time.Time) bool {
+	expiresAt, err := time.Parse(time.RFC3339, value.ExpiresAt)
+	return err != nil || !expiresAt.After(now.Add(time.Minute))
+}
+
+func credentialIsCurrentlyValid(value credential.Credential, now time.Time) bool {
+	expiresAt, err := time.Parse(time.RFC3339, value.ExpiresAt)
+	return err == nil && expiresAt.After(now)
 }
 
 func (r *runner) loadConfig() (string, config.Config, error) {
@@ -817,13 +754,14 @@ func (r *runner) loadConfig() (string, config.Config, error) {
 }
 
 type globalOptions struct {
-	mode        output.Mode
-	controlURL  string
-	environment string
+	mode                output.Mode
+	controlURL          string
+	environment         string
+	environmentExplicit bool
 }
 
 func parseGlobal(args []string) (globalOptions, string, []string, error) {
-	options := globalOptions{mode: output.Text, controlURL: defaultControlURL, environment: "production"}
+	options := globalOptions{mode: output.Text, controlURL: defaultControlURL}
 	for len(args) > 0 {
 		switch args[0] {
 		case "--json":
@@ -843,18 +781,36 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 				return options, "", nil, errors.New("--environment needs a value")
 			}
 			options.environment = args[1]
+			options.environmentExplicit = true
 			args = args[2:]
 		default:
 			if strings.HasPrefix(args[0], "-") && args[0] != "--help" && args[0] != "--version" {
 				return options, "", nil, fmt.Errorf("unknown global flag %q", args[0])
 			}
-			if options.environment != "development" && options.environment != "production" {
+			if options.environmentExplicit && options.environment != "development" && options.environment != "production" {
 				return options, "", nil, errors.New("--environment must be development or production")
 			}
 			return options, args[0], args[1:], nil
 		}
 	}
 	return options, "", nil, nil
+}
+
+func defaultEnvironment(command, directory string) string {
+	switch command {
+	case "plan", "deploy":
+		return "production"
+	case "dev":
+		return "development"
+	}
+	path, err := config.Find(directory)
+	if err == nil {
+		value, loadErr := config.Load(path)
+		if loadErr == nil {
+			return value.SelectedEnvironment
+		}
+	}
+	return "development"
 }
 
 func containsHelp(args []string) bool {
@@ -947,6 +903,76 @@ func slug(value string) string {
 		}
 	}
 	return strings.Trim(result.String(), "-")
+}
+
+func writeRelayEnvironment(directory, filename, relayURL string) error {
+	const variable = "OPEN_E2EE_RELAY_URL"
+	const configuredComment = "# Public Managed Relay connection. This is not a credential."
+	const unconfiguredComment = "# Managed Relay connection is not configured for this environment."
+	path := filepath.Join(directory, filename)
+	contents, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	lines := strings.Split(strings.TrimRight(string(contents), "\r\n"), "\n")
+	output := make([]string, 0, len(lines)+2)
+	for _, line := range lines {
+		if line == "" && len(output) == 0 {
+			continue
+		}
+		if strings.HasPrefix(line, variable+"=") || line == configuredComment || line == unconfiguredComment {
+			continue
+		}
+		output = append(output, line)
+	}
+	if relayURL == "" {
+		output = append(output, unconfiguredComment)
+	} else {
+		output = append(output, configuredComment, variable+"="+relayURL)
+	}
+	if err := writePublicFile(path, []byte(strings.Join(output, "\n")+"\n")); err != nil {
+		return err
+	}
+	ignorePath := filepath.Join(directory, ".gitignore")
+	ignored, err := os.ReadFile(ignorePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, line := range strings.Split(string(ignored), "\n") {
+		if strings.TrimSpace(line) == filename {
+			return nil
+		}
+	}
+	prefix := string(ignored)
+	if prefix != "" && !strings.HasSuffix(prefix, "\n") {
+		prefix += "\n"
+	}
+	return writePublicFile(ignorePath, []byte(prefix+filename+"\n"))
+}
+
+func writePublicFile(path string, contents []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".open-e2ee-environment-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(0o644); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(contents); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryName, path)
 }
 
 func mustConfigPath(start string) string {

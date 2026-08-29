@@ -5,18 +5,13 @@ import "context"
 type API interface {
 	Health(context.Context) error
 	StartAuthorization(context.Context, AuthorizationRequest) (Authorization, error)
-	PollAuthorization(context.Context, string) (Token, error)
+	PollAuthorization(context.Context, Authorization) (Token, error)
+	RefreshAuthorization(context.Context, string) (Token, error)
 	BootstrapDevelopment(context.Context, CredentialRequest, BootstrapRequest) (Bootstrap, error)
 	Activation(context.Context, CredentialRequest, string) (Activation, error)
 	Plan(context.Context, CredentialRequest, PlanRequest) (Plan, error)
 	Deploy(context.Context, CredentialRequest, DeployRequest) (Deployment, error)
-	ListProjects(context.Context, CredentialRequest) ([]Project, error)
 	GetProject(context.Context, CredentialRequest, string) (Project, error)
-	ListProviders(context.Context, CredentialRequest, string) ([]Provider, error)
-	SetProvider(context.Context, CredentialRequest, ProviderRequest) (Provider, error)
-	ListSecrets(context.Context, CredentialRequest, string) ([]Secret, error)
-	SetSecret(context.Context, CredentialRequest, SecretRequest) error
-	DeleteSecret(context.Context, CredentialRequest, string, string) error
 }
 
 type CredentialRequest struct {
@@ -24,38 +19,39 @@ type CredentialRequest struct {
 	OperationID string
 }
 
-type AuthorizationRequest struct {
-	Scopes []string `json:"scopes"`
-}
+type AuthorizationRequest struct{}
 
 type Authorization struct {
-	ID              string `json:"id"`
-	VerificationURL string `json:"verificationUrl"`
-	UserCode        string `json:"userCode"`
-	IntervalSeconds int    `json:"intervalSeconds"`
+	ClientID         string `json:"-"`
+	DeviceCode       string `json:"-"`
+	ExpiresInSeconds int    `json:"-"`
+	IntervalSeconds  int    `json:"intervalSeconds"`
+	TokenEndpoint    string `json:"-"`
+	UserCode         string `json:"userCode"`
+	VerificationURL  string `json:"verificationUrl"`
 }
 
 type Token struct {
-	Pending     bool     `json:"pending"`
-	AccessToken string   `json:"accessToken,omitempty"`
-	Scopes      []string `json:"scopes,omitempty"`
-	ExpiresAt   string   `json:"expiresAt,omitempty"`
+	Pending           bool   `json:"pending"`
+	AccessToken       string `json:"accessToken,omitempty"`
+	ExpiresAt         string `json:"expiresAt,omitempty"`
+	RefreshToken      string `json:"refreshToken,omitempty"`
+	RetryAfterSeconds int    `json:"-"`
 }
 
 type BootstrapRequest struct {
-	ProjectSlug      string `json:"project"`
-	Writer           string `json:"writer"`
-	ExpectedRevision string `json:"expectedRevision,omitempty"`
+	Policy      RelayPolicyRequest `json:"policy"`
+	ProjectSlug string             `json:"project"`
+	Writer      string             `json:"writer"`
 }
 
 type Bootstrap struct {
-	ProjectID            string `json:"projectId"`
-	ProjectSlug          string `json:"project"`
-	Writer               string `json:"writer"`
-	Revision             string `json:"revision"`
-	DevelopmentPublicKey string `json:"developmentPublishableKey"`
-	ProductionPublicKey  string `json:"productionPublishableKey"`
-	Environment          string `json:"environment"`
+	ProjectID           string `json:"projectId"`
+	ProjectSlug         string `json:"project"`
+	Writer              string `json:"writer"`
+	Revision            string `json:"revision"`
+	DevelopmentRelayURL string `json:"developmentRelayUrl"`
+	Environment         string `json:"environment"`
 }
 
 type Activation struct {
@@ -64,11 +60,15 @@ type Activation struct {
 }
 
 type PlanRequest struct {
-	ProjectSlug      string `json:"project"`
-	Environment      string `json:"environment"`
-	Writer           string `json:"writer"`
-	ExpectedRevision string `json:"expectedRevision,omitempty"`
-	Config           any    `json:"config"`
+	Environment string             `json:"environment"`
+	Policy      RelayPolicyRequest `json:"policy"`
+	ProjectSlug string             `json:"project"`
+	Writer      string             `json:"writer"`
+}
+
+type RelayPolicyRequest struct {
+	AttachmentRetentionSeconds int `json:"attachmentRetentionSeconds"`
+	DeliveryTtlSeconds         int `json:"deliveryTtlSeconds"`
 }
 
 type Change struct {
@@ -79,7 +79,7 @@ type Change struct {
 
 type Plan struct {
 	ID               string   `json:"id"`
-	ProjectID        string   `json:"projectId"`
+	ProjectSlug      string   `json:"project"`
 	Environment      string   `json:"environment"`
 	ExpectedRevision string   `json:"expectedRevision"`
 	Changes          []Change `json:"changes"`
@@ -88,48 +88,30 @@ type Plan struct {
 }
 
 type DeployRequest struct {
-	PlanID           string `json:"planId"`
-	Writer           string `json:"writer"`
-	ExpectedRevision string `json:"expectedRevision"`
+	ExpectedRevision string             `json:"expectedRevision"`
+	PlanID           string             `json:"planId"`
+	Policy           RelayPolicyRequest `json:"policy"`
+	ProjectSlug      string             `json:"project"`
+	Writer           string             `json:"writer"`
 }
 
 type Deployment struct {
 	ID       string `json:"id"`
 	Revision string `json:"revision"`
 	Status   string `json:"status"`
+	RelayURL string `json:"relayUrl"`
 }
 
 type Project struct {
-	ID                        string `json:"id"`
-	Slug                      string `json:"slug"`
-	Writer                    string `json:"writer"`
-	Revision                  string `json:"revision"`
-	DevelopmentPublishableKey string `json:"developmentPublishableKey,omitempty"`
-	ProductionPublishableKey  string `json:"productionPublishableKey,omitempty"`
+	Development *ProjectEnvironment `json:"development,omitempty"`
+	Production  *ProjectEnvironment `json:"production,omitempty"`
+	Slug        string              `json:"slug"`
+	Writer      string              `json:"writer"`
 }
 
-type Provider struct {
-	ID          string `json:"id"`
-	Kind        string `json:"kind"`
-	Issuer      string `json:"issuer"`
-	Environment string `json:"environment"`
-}
-
-type ProviderRequest struct {
-	ProjectSlug string `json:"project"`
-	Environment string `json:"environment"`
-	Kind        string `json:"kind"`
-	Issuer      string `json:"issuer,omitempty"`
-}
-
-type Secret struct {
-	Name      string `json:"name"`
-	UpdatedAt string `json:"updatedAt"`
-}
-
-type SecretRequest struct {
-	ProjectSlug string `json:"project"`
-	Environment string `json:"environment"`
-	Name        string `json:"name"`
-	Value       string `json:"value"`
+type ProjectEnvironment struct {
+	AttachmentRetentionSeconds int    `json:"attachmentRetentionSeconds"`
+	DeliveryTtlSeconds         int    `json:"deliveryTtlSeconds"`
+	RelayURL                   string `json:"relayUrl"`
+	Revision                   string `json:"revision"`
 }

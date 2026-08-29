@@ -32,13 +32,11 @@ round trip.
 ```text
 oe init       initialize public policy and the local encrypted example
 oe login      use browser authorization and store the result in the OS keychain
-oe dev        create managed development and wait for its first acknowledged message
+oe dev        create managed development, install its Relay connection, and wait for acknowledgement
 oe plan       show the production configuration change without applying it
-oe deploy     complete the production card gate, confirm, and deploy
-oe doctor     check config, credentials, and control-plane health
-oe project    list, inspect, or select a project
-oe provider   inspect or configure an advanced identity provider
-oe secret     list names, set a value, or delete a service secret
+oe deploy     complete the production card gate, deploy, and install its Relay connection
+oe doctor     check project, environment, connection, credentials, and control-plane health
+oe project    inspect or select a project
 ```
 
 Global `--json` emits one final JSON document. `--json-stream` emits
@@ -61,6 +59,16 @@ Each project has one writer mode:
 Local mutation commands take an advisory project lock. Remote mutations include
 a stable idempotency key. Plans and deploys include the server's expected
 revision. A console-first project or a revision conflict fails closed.
+
+The config records the selected environment. Each selected environment stores one public `relayUrl`. `oe dev` writes the
+development value to `.env.local`. `oe deploy` writes the production value to
+`.env.production.local`. Both files use the semantic
+`OPEN_E2EE_RELAY_URL` setting. The commands add both files to `.gitignore`. The application
+does not select a Relay hostname or pair an endpoint with a second key.
+
+`oe deploy` writes `.env.production.local`. If the hosting provider does not
+read that file, install its `OPEN_E2EE_RELAY_URL` value in the production build
+environment. The application source stays unchanged.
 
 ## Distribution contract
 

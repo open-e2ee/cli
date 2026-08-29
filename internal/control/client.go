@@ -3,6 +3,7 @@ package control
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,49 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
+type authConfiguration struct {
+	ClientID                    string `json:"clientId"`
+	DeviceAuthorizationEndpoint string `json:"deviceAuthorizationEndpoint"`
+	SchemaVersion               int    `json:"schemaVersion"`
+	TokenEndpoint               string `json:"tokenEndpoint"`
+}
+
+type deviceAuthorizationResponse struct {
+	DeviceCode              string `json:"device_code"`
+	ExpiresIn               int    `json:"expires_in"`
+	Interval                int    `json:"interval"`
+	UserCode                string `json:"user_code"`
+	VerificationURI         string `json:"verification_uri"`
+	VerificationURIComplete string `json:"verification_uri_complete"`
+}
+
+type oauthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+type oauthErrorResponse struct {
+	Code string `json:"error"`
+}
+
+var (
+	errAuthorizationPending = errors.New("authorization pending")
+	errSlowDown             = errors.New("authorization polling must slow down")
+	ErrSessionExpired       = errors.New("WorkOS session expired")
+)
+
+type oauthRequestError struct {
+	status    int
+	transient bool
+}
+
+func (e *oauthRequestError) Error() string {
+	if e.status == 0 {
+		return "authentication service request failed"
+	}
+	return fmt.Sprintf("authentication service returned status %d", e.status)
+}
+
 func New(baseURL string, client *http.Client) (*Client, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
@@ -40,15 +84,202 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 func (c *Client) StartAuthorization(ctx context.Context, request AuthorizationRequest) (Authorization, error) {
-	var response Authorization
-	err := c.do(ctx, http.MethodPost, "/v1/cli/authorizations", CredentialRequest{}, request, &response)
-	return response, err
+	var configuration authConfiguration
+	if err := c.do(ctx, http.MethodGet, "/v1/auth/configuration", CredentialRequest{}, nil, &configuration); err != nil {
+		return Authorization{}, err
+	}
+	if err := c.validateAuthConfiguration(configuration); err != nil {
+		return Authorization{}, err
+	}
+	var response deviceAuthorizationResponse
+	err := c.doForm(ctx, configuration.DeviceAuthorizationEndpoint, url.Values{
+		"client_id": {configuration.ClientID},
+	}, &response)
+	if err != nil {
+		return Authorization{}, err
+	}
+	verificationURL := response.VerificationURIComplete
+	if verificationURL == "" {
+		verificationURL = response.VerificationURI
+	}
+	if response.DeviceCode == "" || response.UserCode == "" || response.ExpiresIn < 1 || verificationURL == "" {
+		return Authorization{}, errors.New("WorkOS returned an incomplete device authorization")
+	}
+	parsedVerification, err := url.Parse(verificationURL)
+	if err != nil || parsedVerification.Scheme != "https" || parsedVerification.Host == "" || parsedVerification.User != nil {
+		return Authorization{}, errors.New("WorkOS returned an invalid verification URL")
+	}
+	return Authorization{
+		ClientID: configuration.ClientID, DeviceCode: response.DeviceCode,
+		ExpiresInSeconds: response.ExpiresIn, IntervalSeconds: response.Interval,
+		TokenEndpoint: configuration.TokenEndpoint, UserCode: response.UserCode,
+		VerificationURL: verificationURL,
+	}, nil
 }
 
-func (c *Client) PollAuthorization(ctx context.Context, id string) (Token, error) {
-	var response Token
-	err := c.do(ctx, http.MethodGet, "/v1/cli/authorizations/"+url.PathEscape(id), CredentialRequest{}, nil, &response)
-	return response, err
+func (c *Client) PollAuthorization(ctx context.Context, authorization Authorization) (Token, error) {
+	if authorization.ClientID == "" || authorization.DeviceCode == "" || authorization.TokenEndpoint == "" {
+		return Token{}, errors.New("the device authorization is incomplete")
+	}
+	var response oauthTokenResponse
+	err := c.doForm(ctx, authorization.TokenEndpoint, url.Values{
+		"client_id":   {authorization.ClientID},
+		"device_code": {authorization.DeviceCode},
+		"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+	}, &response)
+	if errors.Is(err, errAuthorizationPending) {
+		return Token{Pending: true}, nil
+	}
+	if errors.Is(err, errSlowDown) {
+		return Token{
+			Pending:           true,
+			RetryAfterSeconds: max(authorization.IntervalSeconds+5, 5),
+		}, nil
+	}
+	if err != nil {
+		return Token{}, sanitizeCredentialError(err, authorization.DeviceCode)
+	}
+	return token(response)
+}
+
+func (c *Client) RefreshAuthorization(ctx context.Context, refreshToken string) (Token, error) {
+	var configuration authConfiguration
+	if err := c.do(ctx, http.MethodGet, "/v1/auth/configuration", CredentialRequest{}, nil, &configuration); err != nil {
+		return Token{}, err
+	}
+	if err := c.validateAuthConfiguration(configuration); err != nil {
+		return Token{}, err
+	}
+	if refreshToken == "" {
+		return Token{}, errors.New("the refresh credential is empty")
+	}
+	form := url.Values{
+		"client_id":     {configuration.ClientID},
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		var response oauthTokenResponse
+		err := c.doForm(ctx, configuration.TokenEndpoint, form, &response)
+		if err == nil {
+			return token(response)
+		}
+		var requestError *oauthRequestError
+		if !errors.As(err, &requestError) || !requestError.transient {
+			return Token{}, sanitizeCredentialError(err, refreshToken)
+		}
+		if attempt == 2 {
+			return Token{}, sanitizeCredentialError(err, refreshToken)
+		}
+		delay := time.Duration(250*(1<<attempt)) * time.Millisecond
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return Token{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	panic("unreachable")
+}
+
+func (c *Client) validateAuthConfiguration(configuration authConfiguration) error {
+	if configuration.SchemaVersion != 1 || !strings.HasPrefix(configuration.ClientID, "client_") {
+		return errors.New("the CLI authentication configuration is invalid")
+	}
+	for value, expectedPath := range map[string]string{
+		configuration.DeviceAuthorizationEndpoint: "/user_management/authorize/device",
+		configuration.TokenEndpoint:               "/user_management/authenticate",
+	} {
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != expectedPath {
+			return errors.New("the CLI authentication configuration is invalid")
+		}
+		production := parsed.Scheme == "https" && parsed.Host == "api.workos.com"
+		loopback := isLoopback(c.baseURL.Hostname()) && parsed.Scheme == c.baseURL.Scheme && parsed.Host == c.baseURL.Host
+		if !production && !loopback {
+			return errors.New("the CLI authentication configuration is invalid")
+		}
+	}
+	return nil
+}
+
+func isLoopback(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+func (c *Client) doForm(ctx context.Context, endpoint string, form url.Values, output any) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return &oauthRequestError{transient: true}
+	}
+	defer response.Body.Close()
+	limited := io.LimitReader(response.Body, 1<<20)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var failure oauthErrorResponse
+		_ = json.NewDecoder(limited).Decode(&failure)
+		switch failure.Code {
+		case "authorization_pending":
+			return errAuthorizationPending
+		case "slow_down":
+			return errSlowDown
+		case "access_denied":
+			return errors.New("browser authorization was denied")
+		case "expired_token":
+			return errors.New("browser authorization expired; run oe login again")
+		case "invalid_grant":
+			return ErrSessionExpired
+		default:
+			return &oauthRequestError{
+				status: response.StatusCode,
+				transient: response.StatusCode == http.StatusRequestTimeout ||
+					response.StatusCode == http.StatusTooManyRequests ||
+					response.StatusCode >= 500,
+			}
+		}
+	}
+	if err := json.NewDecoder(limited).Decode(output); err != nil {
+		return fmt.Errorf("decode authentication response: %w", err)
+	}
+	return nil
+}
+
+func token(response oauthTokenResponse) (Token, error) {
+	if response.AccessToken == "" || response.RefreshToken == "" {
+		return Token{}, errors.New("WorkOS returned an incomplete session")
+	}
+	expiresAt, err := jwtExpiration(response.AccessToken)
+	if err != nil {
+		return Token{}, err
+	}
+	return Token{
+		AccessToken: response.AccessToken, ExpiresAt: expiresAt,
+		RefreshToken: response.RefreshToken,
+	}, nil
+}
+
+func jwtExpiration(value string) (string, error) {
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return "", errors.New("WorkOS returned an invalid access token")
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", errors.New("WorkOS returned an invalid access token")
+	}
+	var claims struct {
+		ExpiresAt int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.ExpiresAt < 1 {
+		return "", errors.New("WorkOS returned an invalid access token")
+	}
+	return time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339), nil
 }
 
 func (c *Client) BootstrapDevelopment(ctx context.Context, credential CredentialRequest, request BootstrapRequest) (Bootstrap, error) {
@@ -75,48 +306,10 @@ func (c *Client) Deploy(ctx context.Context, credential CredentialRequest, reque
 	return response, err
 }
 
-func (c *Client) ListProjects(ctx context.Context, credential CredentialRequest) ([]Project, error) {
-	var response struct {
-		Projects []Project `json:"projects"`
-	}
-	err := c.do(ctx, http.MethodGet, "/v1/projects", credential, nil, &response)
-	return response.Projects, err
-}
-
 func (c *Client) GetProject(ctx context.Context, credential CredentialRequest, project string) (Project, error) {
 	var response Project
 	err := c.do(ctx, http.MethodGet, projectPath(project, ""), credential, nil, &response)
 	return response, err
-}
-
-func (c *Client) ListProviders(ctx context.Context, credential CredentialRequest, project string) ([]Provider, error) {
-	var response struct {
-		Providers []Provider `json:"providers"`
-	}
-	err := c.do(ctx, http.MethodGet, projectPath(project, "providers"), credential, nil, &response)
-	return response.Providers, err
-}
-
-func (c *Client) SetProvider(ctx context.Context, credential CredentialRequest, request ProviderRequest) (Provider, error) {
-	var response Provider
-	err := c.do(ctx, http.MethodPut, projectPath(request.ProjectSlug, "providers/"+url.PathEscape(request.Environment)), credential, request, &response)
-	return response, err
-}
-
-func (c *Client) ListSecrets(ctx context.Context, credential CredentialRequest, project string) ([]Secret, error) {
-	var response struct {
-		Secrets []Secret `json:"secrets"`
-	}
-	err := c.do(ctx, http.MethodGet, projectPath(project, "secrets"), credential, nil, &response)
-	return response.Secrets, err
-}
-
-func (c *Client) SetSecret(ctx context.Context, credential CredentialRequest, request SecretRequest) error {
-	return c.do(ctx, http.MethodPut, projectPath(request.ProjectSlug, "secrets/"+url.PathEscape(request.Name)), credential, request, nil)
-}
-
-func (c *Client) DeleteSecret(ctx context.Context, credential CredentialRequest, project, name string) error {
-	return c.do(ctx, http.MethodDelete, projectPath(project, "secrets/"+url.PathEscape(name)), credential, nil, nil)
 }
 
 func (c *Client) do(ctx context.Context, method, endpoint string, credential CredentialRequest, body, output any) error {
@@ -167,8 +360,19 @@ func sanitizeCredentialError(err error, accessToken string) error {
 	if err == nil || accessToken == "" {
 		return err
 	}
-	return errors.New(strings.ReplaceAll(err.Error(), accessToken, "[redacted]"))
+	return &sanitizedError{
+		cause:   err,
+		message: strings.ReplaceAll(err.Error(), accessToken, "[redacted]"),
+	}
 }
+
+type sanitizedError struct {
+	cause   error
+	message string
+}
+
+func (e *sanitizedError) Error() string { return e.message }
+func (e *sanitizedError) Unwrap() error { return e.cause }
 
 type statusError struct {
 	status    int

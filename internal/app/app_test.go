@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,14 +18,19 @@ import (
 	"github.com/open-e2ee/cli/internal/credential"
 )
 
+const (
+	developmentRelayURL = "https://development.relay.open-e2ee.dev/v1/connection/pk_dev_public"
+	productionRelayURL  = "https://relay.open-e2ee.dev/v1/connection/pk_prod_public"
+)
+
 func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 	store := credential.NewMemory()
 	api := &fakeAPI{
 		startAuthorization: func(context.Context, control.AuthorizationRequest) (control.Authorization, error) {
-			return control.Authorization{ID: "authorization", VerificationURL: "https://login.example/device", UserCode: "ABCD", IntervalSeconds: 1}, nil
+			return control.Authorization{DeviceCode: "authorization", VerificationURL: "https://login.example/device", UserCode: "ABCD", IntervalSeconds: 1}, nil
 		},
-		pollAuthorization: func(context.Context, string) (control.Token, error) {
-			return control.Token{AccessToken: "browser-secret", Scopes: []string{"project:read"}}, nil
+		pollAuthorization: func(context.Context, control.Authorization) (control.Token, error) {
+			return control.Token{AccessToken: "browser-secret"}, nil
 		},
 	}
 	var stdout bytes.Buffer
@@ -43,7 +49,11 @@ func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 	if strings.Contains(stdout.String(), "browser-secret") {
 		t.Fatal("login output exposed the access token")
 	}
-	stored, err := store.Get(defaultControlURL)
+	profile, err := credential.Profile(defaultControlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Get(profile)
 	if err != nil || stored.AccessToken != "browser-secret" {
 		t.Fatalf("credential was not stored: %#v, %v", stored, err)
 	}
@@ -59,12 +69,12 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 			if request.OperationID == "" {
 				t.Fatal("bootstrap omitted idempotency key")
 			}
-			if bootstrap.Writer != "config" {
+			if bootstrap.Writer != "config" || bootstrap.Policy.DeliveryTtlSeconds != 86_400 || bootstrap.Policy.AttachmentRetentionSeconds != 86_400 {
 				t.Fatalf("unexpected writer %q", bootstrap.Writer)
 			}
 			return control.Bootstrap{
 				ProjectSlug: "managed-chat", Writer: "config", Environment: "development",
-				DevelopmentPublicKey: "pk_dev_public", ProductionPublicKey: "pk_prod_public",
+				DevelopmentRelayURL: developmentRelayURL,
 			}, nil
 		},
 		activation: func(context.Context, control.CredentialRequest, string) (control.Activation, error) {
@@ -87,8 +97,12 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.Environments["development"].PublishableKey != "pk_dev_public" || value.Environments["production"].PublishableKey != "pk_prod_public" {
-		t.Fatalf("publishable configuration not written: %#v", value.Environments)
+	if value.Environments["development"].RelayURL != developmentRelayURL || value.Environments["production"].RelayURL != "" {
+		t.Fatalf("development Relay connection was not written in isolation: %#v", value.Environments)
+	}
+	environment, err := os.ReadFile(filepath.Join(directory, ".env.local"))
+	if err != nil || !strings.Contains(string(environment), "OPEN_E2EE_RELAY_URL="+developmentRelayURL) {
+		t.Fatalf("development environment was not installed: %q %v", environment, err)
 	}
 	if activationCalls != 2 || !strings.Contains(stdout.String(), "firstAcknowledgedMessage") {
 		t.Fatalf("did not wait for first acknowledgement: calls=%d output=%s", activationCalls, stdout.String())
@@ -102,17 +116,17 @@ func TestDeployRequiresBillingAndExplicitJSONConfirmation(t *testing.T) {
 	deployed := false
 	api := &fakeAPI{
 		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-			return control.Project{Slug: "production-chat", Writer: "config", Revision: "revision-7"}, nil
+			return control.Project{Slug: "production-chat", Writer: "config", Production: projectEnvironment(productionRelayURL, "7")}, nil
 		},
 		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
-			return control.Plan{ID: "plan-1", Environment: "production", ExpectedRevision: "revision-7", BillingReady: true, Changes: []control.Change{{Path: "relay.deliveryRetention"}}}, nil
+			return control.Plan{ID: "plan-1", ProjectSlug: "production-chat", Environment: "production", ExpectedRevision: "7", BillingReady: true, Changes: []control.Change{{Path: "relay.deliveryRetentionSeconds"}}}, nil
 		},
 		deploy: func(_ context.Context, request control.CredentialRequest, deployment control.DeployRequest) (control.Deployment, error) {
 			deployed = true
-			if request.OperationID == "" || deployment.ExpectedRevision != "revision-7" {
+			if request.OperationID == "" || deployment.ExpectedRevision != "7" || deployment.ProjectSlug != "production-chat" || deployment.Policy.DeliveryTtlSeconds != 2_592_000 {
 				t.Fatalf("deploy lost concurrency contract: %#v %#v", request, deployment)
 			}
-			return control.Deployment{ID: "deployment-1", Revision: "revision-8", Status: "complete"}, nil
+			return control.Deployment{ID: "deployment-1", Revision: "revision-8", Status: "complete", RelayURL: productionRelayURL}, nil
 		},
 	}
 	var stdout bytes.Buffer
@@ -125,6 +139,52 @@ func TestDeployRequiresBillingAndExplicitJSONConfirmation(t *testing.T) {
 	if exit != 0 || !deployed {
 		t.Fatalf("confirmed deploy failed: deployed=%v output=%s", deployed, stdout.String())
 	}
+	environment, err := os.ReadFile(filepath.Join(directory, ".env.production.local"))
+	if err != nil || !strings.Contains(string(environment), "OPEN_E2EE_RELAY_URL="+productionRelayURL) {
+		t.Fatalf("production environment was not installed: %q %v", environment, err)
+	}
+	if !strings.Contains(stdout.String(), `"configurationFile":".env.production.local"`) || strings.Contains(stdout.String(), productionRelayURL) {
+		t.Fatalf("production handoff was incomplete or exposed the connection: %s", stdout.String())
+	}
+}
+
+func TestDoctorReportsSafeConnectionOriginAndRefusesProjectDrift(t *testing.T) {
+	directory := initializedProject(t, "doctor-chat")
+	path := filepath.Join(directory, config.Filename)
+	value, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	development := value.Environments["development"]
+	development.RelayURL = developmentRelayURL
+	value.Environments["development"] = development
+	if err := config.Write(path, value); err != nil {
+		t.Fatal(err)
+	}
+	store := credential.NewMemory()
+	storeCredential(t, store, "project:read")
+	api := &fakeAPI{getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
+		return control.Project{Slug: "doctor-chat", Development: projectEnvironment(developmentRelayURL, "1")}, nil
+	}}
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() != developmentRelayURL {
+			t.Fatalf("doctor requested an unexpected URL: %s", request.URL)
+		}
+		return &http.Response{Body: io.NopCloser(strings.NewReader(`{"schemaVersion":1}`)), Header: make(http.Header), StatusCode: http.StatusOK}, nil
+	})}
+	var stdout bytes.Buffer
+	exit := Run(context.Background(), []string{"--environment", "development", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	if exit != 0 || !strings.Contains(stdout.String(), `"relayOrigin":"https://development.relay.open-e2ee.dev"`) || strings.Contains(stdout.String(), "pk_dev_public") {
+		t.Fatalf("doctor did not report only the safe origin: %s", stdout.String())
+	}
+	api.getProject = func(context.Context, control.CredentialRequest, string) (control.Project, error) {
+		return control.Project{Slug: "doctor-chat", Development: projectEnvironment("https://development.relay.open-e2ee.dev/v1/connection/another-project", "1")}, nil
+	}
+	stdout.Reset()
+	exit = Run(context.Background(), []string{"--environment", "development", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	if exit == 0 || !strings.Contains(stdout.String(), "stale or belongs to another project") || strings.Contains(stdout.String(), "pk_dev_public") {
+		t.Fatalf("doctor did not refuse project drift safely: %s", stdout.String())
+	}
 }
 
 func TestDeployOpensCardSetupBeforeProductionMutation(t *testing.T) {
@@ -134,10 +194,10 @@ func TestDeployOpensCardSetupBeforeProductionMutation(t *testing.T) {
 	var opened string
 	api := &fakeAPI{
 		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-			return control.Project{Slug: "billing-chat", Writer: "config", Revision: "one"}, nil
+			return control.Project{Slug: "billing-chat", Writer: "config"}, nil
 		},
 		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
-			return control.Plan{ID: "plan", Environment: "production", ExpectedRevision: "one", BillingSetupURL: "https://billing.example/setup"}, nil
+			return control.Plan{ID: "plan", ProjectSlug: "billing-chat", Environment: "production", ExpectedRevision: "0", BillingSetupURL: "https://billing.example/setup"}, nil
 		},
 	}
 	var stdout bytes.Buffer
@@ -172,52 +232,7 @@ func TestConsoleWriterFailsBeforeRemoteMutation(t *testing.T) {
 	}
 }
 
-func TestSecretValueIsNeverPrintedOrWritten(t *testing.T) {
-	directory := initializedProject(t, "secret-chat")
-	store := credential.NewMemory()
-	storeCredential(t, store, "secret:write")
-	var captured string
-	api := &fakeAPI{setSecret: func(_ context.Context, request control.CredentialRequest, secret control.SecretRequest) error {
-		if request.OperationID == "" {
-			t.Fatal("secret mutation omitted idempotency key")
-		}
-		captured = secret.Value
-		return nil
-	}}
-	t.Setenv("TEST_RELAY_SECRET", "highly-sensitive-value")
-	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--json", "secret", "set", "AUTH_PRIVATE_KEY", "--from-env", "TEST_RELAY_SECRET"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit != 0 || captured != "highly-sensitive-value" {
-		t.Fatalf("secret set failed: captured=%q output=%s", captured, stdout.String())
-	}
-	if strings.Contains(stdout.String(), captured) {
-		t.Fatal("secret output exposed the value")
-	}
-	contents, err := os.ReadFile(filepath.Join(directory, config.Filename))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(contents), captured) {
-		t.Fatal("config file contained the secret value")
-	}
-}
-
-func TestSecretValueIsRedactedFromControlError(t *testing.T) {
-	directory := initializedProject(t, "secret-error-chat")
-	store := credential.NewMemory()
-	storeCredential(t, store, "secret:write")
-	api := &fakeAPI{setSecret: func(_ context.Context, _ control.CredentialRequest, secret control.SecretRequest) error {
-		return errors.New("server rejected " + secret.Value)
-	}}
-	t.Setenv("TEST_RELAY_SECRET", "must-never-appear")
-	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--json", "secret", "set", "AUTH_KEY", "--from-env", "TEST_RELAY_SECRET"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit == 0 || strings.Contains(stdout.String(), "must-never-appear") || !strings.Contains(stdout.String(), "[redacted]") {
-		t.Fatalf("secret error was not redacted: %s", stdout.String())
-	}
-}
-
-func TestProjectSelectionReplacesPublishableKeys(t *testing.T) {
+func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
 	directory := initializedProject(t, "old-chat")
 	path := filepath.Join(directory, config.Filename)
 	value, err := config.Load(path)
@@ -225,18 +240,24 @@ func TestProjectSelectionReplacesPublishableKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	development := value.Environments["development"]
-	development.PublishableKey = "old-development"
+	development.RelayURL = "https://development.relay.open-e2ee.dev/v1/connection/old-development"
 	value.Environments["development"] = development
 	production := value.Environments["production"]
-	production.PublishableKey = "old-production"
+	production.RelayURL = "https://relay.open-e2ee.dev/v1/connection/old-production"
 	value.Environments["production"] = production
 	if err := config.Write(path, value); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRelayEnvironment(directory, ".env.local", development.RelayURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRelayEnvironment(directory, ".env.production.local", production.RelayURL); err != nil {
 		t.Fatal(err)
 	}
 	store := credential.NewMemory()
 	storeCredential(t, store, "project:read")
 	api := &fakeAPI{getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-		return control.Project{Slug: "new-chat", Writer: "config", DevelopmentPublishableKey: "new-development", ProductionPublishableKey: "new-production"}, nil
+		return control.Project{Slug: "new-chat", Writer: "config", Development: projectEnvironment(developmentRelayURL, "1"), Production: projectEnvironment(productionRelayURL, "1")}, nil
 	}}
 	var stdout bytes.Buffer
 	exit := Run(context.Background(), []string{"--json", "project", "select", "new-chat"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
@@ -247,22 +268,52 @@ func TestProjectSelectionReplacesPublishableKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selected.Project != "new-chat" || selected.Environments["development"].PublishableKey != "new-development" || selected.Environments["production"].PublishableKey != "new-production" {
-		t.Fatalf("project keys were not replaced: %#v", selected)
+	if selected.Project != "new-chat" || selected.Environments["development"].RelayURL != developmentRelayURL || selected.Environments["production"].RelayURL != productionRelayURL {
+		t.Fatalf("project Relay connections were not replaced: %#v", selected)
+	}
+	for filename, expected := range map[string]string{
+		".env.local":            developmentRelayURL,
+		".env.production.local": productionRelayURL,
+	} {
+		contents, err := os.ReadFile(filepath.Join(directory, filename))
+		if err != nil || !strings.Contains(string(contents), "OPEN_E2EE_RELAY_URL="+expected) || strings.Contains(string(contents), "old-") {
+			t.Fatalf("%s did not converge to the selected project: %q %v", filename, contents, err)
+		}
+	}
+}
+
+func TestRelayEnvironmentRemovalCannotLeaveAnotherProjectConnection(t *testing.T) {
+	directory := t.TempDir()
+	filename := ".env.production.local"
+	if err := writeRelayEnvironment(directory, filename, productionRelayURL); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRelayEnvironment(directory, filename, ""); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(filepath.Join(directory, filename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), "OPEN_E2EE_RELAY_URL=") || strings.Contains(string(contents), productionRelayURL) {
+		t.Fatalf("removed environment retained a Relay connection: %q", contents)
+	}
+	if !strings.Contains(string(contents), "not configured for this environment") {
+		t.Fatalf("removed environment has no exact handoff: %q", contents)
 	}
 }
 
 func TestValidatePlanRejectsCrossBoundaryResponses(t *testing.T) {
-	project := control.Project{ID: "project-1", Revision: "revision-1"}
-	valid := control.Plan{ID: "plan-1", ProjectID: "project-1", Environment: "production", ExpectedRevision: "revision-1"}
+	project := control.Project{Slug: "project-one", Production: projectEnvironment(productionRelayURL, "1")}
+	valid := control.Plan{ID: "plan-1", ProjectSlug: "project-one", Environment: "production", ExpectedRevision: "1"}
 	if err := validatePlan(valid, project, "production"); err != nil {
 		t.Fatal(err)
 	}
 	for name, changed := range map[string]control.Plan{
-		"missing id":        {ProjectID: "project-1", Environment: "production", ExpectedRevision: "revision-1"},
-		"wrong project":     {ID: "plan-1", ProjectID: "project-2", Environment: "production", ExpectedRevision: "revision-1"},
-		"wrong environment": {ID: "plan-1", ProjectID: "project-1", Environment: "development", ExpectedRevision: "revision-1"},
-		"stale revision":    {ID: "plan-1", ProjectID: "project-1", Environment: "production", ExpectedRevision: "revision-0"},
+		"missing id":        {ProjectSlug: "project-one", Environment: "production", ExpectedRevision: "1"},
+		"wrong project":     {ID: "plan-1", ProjectSlug: "project-two", Environment: "production", ExpectedRevision: "1"},
+		"wrong environment": {ID: "plan-1", ProjectSlug: "project-one", Environment: "development", ExpectedRevision: "1"},
+		"stale revision":    {ID: "plan-1", ProjectSlug: "project-one", Environment: "production", ExpectedRevision: "0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validatePlan(changed, project, "production"); err == nil {
@@ -272,33 +323,17 @@ func TestValidatePlanRejectsCrossBoundaryResponses(t *testing.T) {
 	}
 }
 
-func TestAdvancedInputValidation(t *testing.T) {
-	if err := validateProvider("device-owned", ""); err != nil {
-		t.Fatal(err)
-	}
-	for _, input := range [][2]string{{"unknown", ""}, {"oidc", "http://issuer.example"}, {"clerk", ""}, {"device-owned", "https://issuer.example"}} {
-		if err := validateProvider(input[0], input[1]); err == nil {
-			t.Fatalf("accepted provider %#v", input)
-		}
-	}
-	for _, name := range []string{"lowercase", "_LEADING", "TRAILING_", "DOUBLE__SEPARATOR", "HAS-DASH"} {
-		if validSecretName(name) {
-			t.Fatalf("accepted secret name %q", name)
-		}
-	}
-}
-
 func TestJSONOutputIsOneDocumentAfterAutomaticLogin(t *testing.T) {
 	directory := initializedProject(t, "login-dev")
 	api := &fakeAPI{
 		startAuthorization: func(context.Context, control.AuthorizationRequest) (control.Authorization, error) {
-			return control.Authorization{ID: "auth", VerificationURL: "https://login.example", UserCode: "CODE"}, nil
+			return control.Authorization{DeviceCode: "auth", VerificationURL: "https://login.example", UserCode: "CODE"}, nil
 		},
-		pollAuthorization: func(context.Context, string) (control.Token, error) {
-			return control.Token{AccessToken: "token", Scopes: []string{"project:write"}}, nil
+		pollAuthorization: func(context.Context, control.Authorization) (control.Token, error) {
+			return control.Token{AccessToken: "token"}, nil
 		},
 		bootstrapDevelopment: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
-			return control.Bootstrap{ProjectSlug: "login-dev", Writer: "config", Environment: "development", DevelopmentPublicKey: "dev", ProductionPublicKey: "prod"}, nil
+			return control.Bootstrap{ProjectSlug: "login-dev", Writer: "config", Environment: "development", DevelopmentRelayURL: developmentRelayURL}, nil
 		},
 	}
 	var stdout bytes.Buffer
@@ -320,6 +355,80 @@ func TestJSONOutputIsOneDocumentAfterAutomaticLogin(t *testing.T) {
 	}
 }
 
+func TestTransientRefreshKeepsAStillValidSession(t *testing.T) {
+	directory := initializedProject(t, "refresh-chat")
+	store := credential.NewMemory()
+	profile, err := credential.Profile(defaultControlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0).UTC()
+	if err := store.Set(profile, credential.Credential{
+		AccessToken: "still-valid-token", ExpiresAt: now.Add(30 * time.Second).Format(time.RFC3339),
+		RefreshToken: "refresh-token",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeAPI{
+		refreshAuthorization: func(context.Context, string) (control.Token, error) {
+			return control.Token{}, errors.New("temporary WorkOS failure")
+		},
+		getProject: func(_ context.Context, request control.CredentialRequest, _ string) (control.Project, error) {
+			if request.AccessToken != "still-valid-token" {
+				t.Fatalf("request did not retain the current session: %#v", request)
+			}
+			return control.Project{Slug: "refresh-chat", Writer: "config"}, nil
+		},
+	}
+	var stdout bytes.Buffer
+	exit := Run(context.Background(), []string{"--json", "project", "show"}, Dependencies{
+		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{},
+		WorkingDir: directory, Now: func() time.Time { return now },
+	})
+	if exit != 0 {
+		t.Fatalf("transient refresh rejected a valid session: %s", stdout.String())
+	}
+}
+
+func TestTerminalRefreshRemovesTheExpiredSession(t *testing.T) {
+	directory := initializedProject(t, "expired-chat")
+	store := credential.NewMemory()
+	profile, err := credential.Profile(defaultControlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1_800_000_000, 0).UTC()
+	if err := store.Set(profile, credential.Credential{
+		AccessToken: "expired-token", ExpiresAt: now.Add(30 * time.Second).Format(time.RFC3339),
+		RefreshToken: "expired-refresh",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeAPI{refreshAuthorization: func(context.Context, string) (control.Token, error) {
+		return control.Token{}, control.ErrSessionExpired
+	}}
+	var stdout bytes.Buffer
+	exit := Run(context.Background(), []string{"--json", "project", "show"}, Dependencies{
+		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{},
+		WorkingDir: directory, Now: func() time.Time { return now },
+	})
+	if exit == 0 || !strings.Contains(stdout.String(), "run oe login again") {
+		t.Fatalf("terminal refresh did not require login: %s", stdout.String())
+	}
+	if _, err := store.Get(profile); !errors.Is(err, credential.ErrNotFound) {
+		t.Fatalf("terminal session remained stored: %v", err)
+	}
+}
+
+func projectEnvironment(relayURL, revision string) *control.ProjectEnvironment {
+	return &control.ProjectEnvironment{
+		AttachmentRetentionSeconds: 86_400,
+		DeliveryTtlSeconds:         86_400,
+		RelayURL:                   relayURL,
+		Revision:                   revision,
+	}
+}
+
 func initializedProject(t *testing.T, project string) string {
 	t.Helper()
 	directory := t.TempDir()
@@ -331,20 +440,30 @@ func initializedProject(t *testing.T, project string) string {
 
 func storeCredential(t *testing.T, store credential.Store, scopes ...string) {
 	t.Helper()
-	if err := store.Set(defaultControlURL, credential.Credential{AccessToken: "test-token", Scopes: scopes}); err != nil {
+	profile, err := credential.Profile(defaultControlURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Set(profile, credential.Credential{AccessToken: "test-token", Scopes: scopes}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 type fakeAPI struct {
 	startAuthorization   func(context.Context, control.AuthorizationRequest) (control.Authorization, error)
-	pollAuthorization    func(context.Context, string) (control.Token, error)
+	pollAuthorization    func(context.Context, control.Authorization) (control.Token, error)
+	refreshAuthorization func(context.Context, string) (control.Token, error)
 	bootstrapDevelopment func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error)
 	activation           func(context.Context, control.CredentialRequest, string) (control.Activation, error)
 	plan                 func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error)
 	deploy               func(context.Context, control.CredentialRequest, control.DeployRequest) (control.Deployment, error)
 	getProject           func(context.Context, control.CredentialRequest, string) (control.Project, error)
-	setSecret            func(context.Context, control.CredentialRequest, control.SecretRequest) error
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
 }
 
 func (f *fakeAPI) Health(context.Context) error { return nil }
@@ -354,11 +473,17 @@ func (f *fakeAPI) StartAuthorization(ctx context.Context, request control.Author
 	}
 	return f.startAuthorization(ctx, request)
 }
-func (f *fakeAPI) PollAuthorization(ctx context.Context, id string) (control.Token, error) {
+func (f *fakeAPI) PollAuthorization(ctx context.Context, authorization control.Authorization) (control.Token, error) {
 	if f.pollAuthorization == nil {
 		return control.Token{}, errors.New("unexpected PollAuthorization")
 	}
-	return f.pollAuthorization(ctx, id)
+	return f.pollAuthorization(ctx, authorization)
+}
+func (f *fakeAPI) RefreshAuthorization(ctx context.Context, refreshToken string) (control.Token, error) {
+	if f.refreshAuthorization == nil {
+		return control.Token{}, errors.New("unexpected RefreshAuthorization")
+	}
+	return f.refreshAuthorization(ctx, refreshToken)
 }
 func (f *fakeAPI) BootstrapDevelopment(ctx context.Context, credential control.CredentialRequest, request control.BootstrapRequest) (control.Bootstrap, error) {
 	if f.bootstrapDevelopment == nil {
@@ -384,30 +509,9 @@ func (f *fakeAPI) Deploy(ctx context.Context, credential control.CredentialReque
 	}
 	return f.deploy(ctx, credential, request)
 }
-func (f *fakeAPI) ListProjects(context.Context, control.CredentialRequest) ([]control.Project, error) {
-	return nil, nil
-}
 func (f *fakeAPI) GetProject(ctx context.Context, credential control.CredentialRequest, project string) (control.Project, error) {
 	if f.getProject == nil {
 		return control.Project{}, errors.New("unexpected GetProject")
 	}
 	return f.getProject(ctx, credential, project)
-}
-func (f *fakeAPI) ListProviders(context.Context, control.CredentialRequest, string) ([]control.Provider, error) {
-	return nil, nil
-}
-func (f *fakeAPI) SetProvider(context.Context, control.CredentialRequest, control.ProviderRequest) (control.Provider, error) {
-	return control.Provider{}, nil
-}
-func (f *fakeAPI) ListSecrets(context.Context, control.CredentialRequest, string) ([]control.Secret, error) {
-	return nil, nil
-}
-func (f *fakeAPI) SetSecret(ctx context.Context, credential control.CredentialRequest, request control.SecretRequest) error {
-	if f.setSecret == nil {
-		return errors.New("unexpected SetSecret")
-	}
-	return f.setSecret(ctx, credential, request)
-}
-func (f *fakeAPI) DeleteSecret(context.Context, control.CredentialRequest, string, string) error {
-	return nil
 }

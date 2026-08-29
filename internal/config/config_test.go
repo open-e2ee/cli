@@ -46,14 +46,46 @@ func TestLoadAcceptsJSONC(t *testing.T) {
   "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
   "project": "jsonc-chat", // project comment
   "writer": "config",
+  "selectedEnvironment": "development",
   "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d", },
-  "environments": { "development": {}, "production": {}, },
+  "environments": {
+    "development": { "relay": { "deliveryRetention": "1d", "attachmentRetention": "1d" } },
+    "production": {}
+  },
 }`
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Load(path); err != nil {
 		t.Fatalf("valid JSONC rejected: %v", err)
+	}
+}
+
+func TestEnvironmentUsesOneRelayConnectionURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), Filename)
+	contents := `{
+  "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
+  "project": "url-only-chat",
+  "writer": "config",
+  "selectedEnvironment": "production",
+  "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d" },
+  "environments": {
+    "development": {
+      "relayUrl": "https://development.relay.open-e2ee.dev/v1/connection/public-locator",
+      "relay": { "deliveryRetention": "1d", "attachmentRetention": "1d" }
+    },
+    "production": { "relayUrl": "https://relay.open-e2ee.dev/v1/connection/public-locator" }
+  }
+}`
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	value, err := Load(path)
+	if err != nil {
+		t.Fatalf("one Relay connection URL was rejected: %v", err)
+	}
+	if value.Environments["development"].RelayURL == "" || value.Environments["production"].RelayURL == "" {
+		t.Fatal("Relay connection URL was not retained")
 	}
 }
 
@@ -71,6 +103,7 @@ func TestLoadRejectsSecretFields(t *testing.T) {
   "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
   "project": "safe-chat",
   "writer": "config",
+  "selectedEnvironment": "development",
   "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d" },
   "environments": { "development": {}, "production": {} },
   "apiSecret": "must-not-be-here"
@@ -89,5 +122,15 @@ func TestValidateProjectSlug(t *testing.T) {
 		if err := value.Validate(); err == nil {
 			t.Fatalf("accepted invalid project %q", invalid)
 		}
+	}
+}
+
+func TestDevelopmentRetentionCannotExceedSevenDays(t *testing.T) {
+	value := New("bounded-development")
+	value.Environments["development"] = Environment{Relay: &RelayPolicy{
+		DeliveryRetention: "14d", AttachmentRetention: "7d",
+	}}
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "managed maximum") {
+		t.Fatalf("development retention above seven days was accepted: %v", err)
 	}
 }

@@ -4,11 +4,19 @@
   "title": "OpenE2EE project configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "project", "writer", "relay", "environments"],
+  "required": [
+    "$schema",
+    "project",
+    "writer",
+    "selectedEnvironment",
+    "relay",
+    "environments"
+  ],
   "properties": {
     "$schema": { "const": "https://open-e2ee.dev/schemas/config/v1.json" },
     "project": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
     "writer": { "enum": ["config", "console"] },
+    "selectedEnvironment": { "enum": ["development", "production"] },
     "relay": { "$ref": "#/$defs/relayPolicy" },
     "environments": {
       "type": "object",
@@ -36,7 +44,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "publishableKey": { "type": "string", "minLength": 1 },
+        "relayUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://(?:development\\.)?relay\\.open-e2ee\\.dev/v1/connection/[A-Za-z0-9_-]{1,255}$"
+        },
         "relay": { "$ref": "#/$defs/relayPolicy" }
       }
     }
