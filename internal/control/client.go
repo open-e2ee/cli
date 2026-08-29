@@ -312,6 +312,19 @@ func (c *Client) GetProject(ctx context.Context, credential CredentialRequest, p
 	return response, err
 }
 
+func (c *Client) Notifications(ctx context.Context, credential CredentialRequest, project, environment string) (NotificationConfiguration, error) {
+	var response NotificationConfiguration
+	endpoint := projectPath(project, "notifications") + "?environment=" + url.QueryEscape(environment)
+	err := c.do(ctx, http.MethodGet, endpoint, credential, nil, &response)
+	return response, err
+}
+
+func (c *Client) ConfigureNotifications(ctx context.Context, credential CredentialRequest, project string, request NotificationConfigurationRequest) (NotificationConfiguration, error) {
+	var response NotificationConfiguration
+	err := c.do(ctx, http.MethodPost, projectPath(project, "notifications"), credential, request, &response)
+	return response, err
+}
+
 func (c *Client) do(ctx context.Context, method, endpoint string, credential CredentialRequest, body, output any) error {
 	encoded, err := encodeBody(body)
 	if err != nil {
@@ -320,7 +333,9 @@ func (c *Client) do(ctx context.Context, method, endpoint string, credential Cre
 	retryable := method != http.MethodPost || credential.OperationID != ""
 	for attempt := 0; attempt < 3; attempt++ {
 		requestURL := *c.baseURL
-		requestURL.Path = path.Join(strings.TrimSuffix(c.baseURL.Path, "/"), endpoint)
+		endpointPath, rawQuery, _ := strings.Cut(endpoint, "?")
+		requestURL.Path = path.Join(strings.TrimSuffix(c.baseURL.Path, "/"), endpointPath)
+		requestURL.RawQuery = rawQuery
 		request, err := http.NewRequestWithContext(ctx, method, requestURL.String(), bytes.NewReader(encoded))
 		if err != nil {
 			return err
