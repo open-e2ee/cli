@@ -46,8 +46,12 @@ func TestLoadAcceptsJSONC(t *testing.T) {
   "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
   "project": "jsonc-chat", // project comment
   "writer": "config",
+  "selectedEnvironment": "development",
   "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d", },
-  "environments": { "development": {}, "production": {}, },
+  "environments": {
+    "development": { "relay": { "deliveryRetention": "1d", "attachmentRetention": "1d" } },
+    "production": {}
+  },
 }`
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
@@ -63,9 +67,13 @@ func TestEnvironmentUsesOneRelayConnectionURL(t *testing.T) {
   "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
   "project": "url-only-chat",
   "writer": "config",
+  "selectedEnvironment": "production",
   "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d" },
   "environments": {
-    "development": { "relayUrl": "https://development.relay.open-e2ee.dev/v1/connection/public-locator" },
+    "development": {
+      "relayUrl": "https://development.relay.open-e2ee.dev/v1/connection/public-locator",
+      "relay": { "deliveryRetention": "1d", "attachmentRetention": "1d" }
+    },
     "production": { "relayUrl": "https://relay.open-e2ee.dev/v1/connection/public-locator" }
   }
 }`
@@ -95,6 +103,7 @@ func TestLoadRejectsSecretFields(t *testing.T) {
   "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
   "project": "safe-chat",
   "writer": "config",
+  "selectedEnvironment": "development",
   "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d" },
   "environments": { "development": {}, "production": {} },
   "apiSecret": "must-not-be-here"
@@ -113,5 +122,15 @@ func TestValidateProjectSlug(t *testing.T) {
 		if err := value.Validate(); err == nil {
 			t.Fatalf("accepted invalid project %q", invalid)
 		}
+	}
+}
+
+func TestDevelopmentRetentionCannotExceedSevenDays(t *testing.T) {
+	value := New("bounded-development")
+	value.Environments["development"] = Environment{Relay: &RelayPolicy{
+		DeliveryRetention: "14d", AttachmentRetention: "7d",
+	}}
+	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "managed maximum") {
+		t.Fatalf("development retention above seven days was accepted: %v", err)
 	}
 }

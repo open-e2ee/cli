@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/tidwall/jsonc"
@@ -18,11 +20,12 @@ const (
 )
 
 type Config struct {
-	Schema       string                 `json:"$schema"`
-	Project      string                 `json:"project"`
-	Writer       string                 `json:"writer"`
-	Relay        RelayPolicy            `json:"relay"`
-	Environments map[string]Environment `json:"environments"`
+	Schema              string                 `json:"$schema"`
+	Project             string                 `json:"project"`
+	Writer              string                 `json:"writer"`
+	SelectedEnvironment string                 `json:"selectedEnvironment"`
+	Relay               RelayPolicy            `json:"relay"`
+	Environments        map[string]Environment `json:"environments"`
 }
 
 type RelayPolicy struct {
@@ -31,15 +34,42 @@ type RelayPolicy struct {
 }
 
 type Environment struct {
-	PublishableKey string       `json:"publishableKey,omitempty"`
-	Relay          *RelayPolicy `json:"relay,omitempty"`
+	RelayURL string       `json:"relayUrl,omitempty"`
+	Relay    *RelayPolicy `json:"relay,omitempty"`
+}
+
+func (c Config) RelayPolicyFor(environment string) (RelayPolicy, error) {
+	if environment != "development" && environment != "production" {
+		return RelayPolicy{}, fmt.Errorf("unsupported environment %q", environment)
+	}
+	selected, ok := c.Environments[environment]
+	if !ok {
+		return RelayPolicy{}, fmt.Errorf("environments.%s is required", environment)
+	}
+	if selected.Relay != nil {
+		return *selected.Relay, nil
+	}
+	return c.Relay, nil
+}
+
+func RetentionSeconds(value string) (int, error) {
+	seconds := map[string]int{
+		"1h": 3_600, "6h": 21_600, "12h": 43_200, "1d": 86_400,
+		"3d": 259_200, "7d": 604_800, "14d": 1_209_600,
+		"30d": 2_592_000,
+	}[value]
+	if seconds == 0 {
+		return 0, errors.New("must be one of 1h, 6h, 12h, 1d, 3d, 7d, 14d, or 30d")
+	}
+	return seconds, nil
 }
 
 func New(project string) Config {
 	return Config{
-		Schema:  SchemaURL,
-		Project: project,
-		Writer:  "config",
+		Schema:              SchemaURL,
+		Project:             project,
+		Writer:              "config",
+		SelectedEnvironment: "development",
 		Relay: RelayPolicy{
 			DeliveryRetention:   "30d",
 			AttachmentRetention: "30d",
@@ -98,6 +128,9 @@ func (c Config) Validate() error {
 	if c.Writer != "config" && c.Writer != "console" {
 		return errors.New("writer must be config or console")
 	}
+	if c.SelectedEnvironment != "development" && c.SelectedEnvironment != "production" {
+		return errors.New("selectedEnvironment must be development or production")
+	}
 	for _, name := range []string{"development", "production"} {
 		if _, ok := c.Environments[name]; !ok {
 			return fmt.Errorf("environments.%s is required", name)
@@ -115,11 +148,55 @@ func (c Config) Validate() error {
 				return fmt.Errorf("environments.%s.relay.attachmentRetention: %w", name, err)
 			}
 		}
+		if environment.RelayURL != "" {
+			if err := validateRelayURL(name, environment.RelayURL); err != nil {
+				return fmt.Errorf("environments.%s.relayUrl: %w", name, err)
+			}
+		}
 	}
 	if err := validateRetention(c.Relay.DeliveryRetention); err != nil {
 		return fmt.Errorf("relay.deliveryRetention: %w", err)
 	}
-	return validateRetention(c.Relay.AttachmentRetention)
+	if err := validateRetention(c.Relay.AttachmentRetention); err != nil {
+		return fmt.Errorf("relay.attachmentRetention: %w", err)
+	}
+	for _, name := range []string{"development", "production"} {
+		policy, err := c.RelayPolicyFor(name)
+		if err != nil {
+			return err
+		}
+		maximum := 30 * 24 * 60 * 60
+		if name == "development" {
+			maximum = 7 * 24 * 60 * 60
+		}
+		for field, value := range map[string]string{
+			"attachmentRetention": policy.AttachmentRetention,
+			"deliveryRetention":   policy.DeliveryRetention,
+		} {
+			seconds, err := RetentionSeconds(value)
+			if err != nil || seconds > maximum {
+				return fmt.Errorf("environments.%s.relay.%s exceeds the managed maximum", name, field)
+			}
+		}
+	}
+	return nil
+}
+
+var relayConnectionPath = regexp.MustCompile(`^/v1/connection/[A-Za-z0-9_-]{1,255}$`)
+
+func validateRelayURL(environment, value string) error {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != value || !relayConnectionPath.MatchString(parsed.EscapedPath()) {
+		return errors.New("must be an environment-scoped Managed Relay connection URL")
+	}
+	expectedHost := "relay.open-e2ee.dev"
+	if environment == "development" {
+		expectedHost = "development.relay.open-e2ee.dev"
+	}
+	if parsed.Host != expectedHost {
+		return fmt.Errorf("belongs to another environment; expected %s", expectedHost)
+	}
+	return nil
 }
 
 func Write(path string, value Config) error {
