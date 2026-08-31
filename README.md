@@ -1,7 +1,7 @@
 # OpenE2EE CLI
 
 `oe` initializes OpenE2EE projects, keeps public service policy in a deterministic
-file, and provides the command boundary for managed development and deployment.
+file, and provides the command boundary for hosted Development and Production.
 
 OpenE2EE Relay provides managed encrypted delivery for the OpenE2EE Signal
 Protocol SDK. This public repository lets developers inspect the command,
@@ -32,7 +32,7 @@ round trip.
 ```text
 oe init       initialize public policy and the local encrypted example
 oe login      use browser authorization and store the result in the OS keychain
-oe dev        create managed development, install its Relay connection, and wait for acknowledgement
+oe dev        create the Development environment, install its Relay connection, and wait for acknowledgement
 oe plan       show the production configuration change without applying it
 oe deploy     complete the production card gate, deploy, and install its Relay connection
 oe doctor     check project, environment, connection, credentials, and control-plane health
@@ -91,7 +91,7 @@ provider payload. Expo projects must use a development or native build. Expo Go
 cannot verify remote push or contain a Notification Service Extension.
 
 `add-nse` creates a generic, timeout-safe Notification Service Extension. Expo
-CNG uses `@bacons/apple-targets`; bare React Native receives the same source and
+CNG uses `@bacons/apple-targets`. Bare React Native receives the same source and
 an exact Xcode target handoff. The extension does not get App Group or Keychain
 access by default and does not decrypt a preview.
 

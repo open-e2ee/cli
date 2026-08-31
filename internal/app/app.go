@@ -351,9 +351,9 @@ func (r *runner) dev(ctx context.Context, args []string) error {
 	if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", bootstrap.DevelopmentRelayURL); err != nil {
 		return err
 	}
-	_ = r.out.Progress("dev", "Managed development is ready. Connect the first device.", map[string]any{"environment": "development"})
+	_ = r.out.Progress("dev", "The Development environment is ready. Connect the first device.", map[string]any{"environment": "development"})
 	if *noWait {
-		return r.out.Success("dev", "Managed development is ready. First-acknowledgement waiting was skipped.", map[string]any{"environment": "development", "waiting": false})
+		return r.out.Success("dev", "The Development environment is ready. First-acknowledgement waiting was skipped.", map[string]any{"environment": "development", "waiting": false})
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
