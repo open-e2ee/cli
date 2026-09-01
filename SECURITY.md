@@ -13,8 +13,9 @@ real access tokens, private keys, recovery material, or customer data.
 - `OE_ACCESS_TOKEN` is a scoped CI input. The CLI does not persist it.
 - The CLI sends secret values only to the protected control API. The CLI does not
   write or print them.
-- Public project configuration can contain publishable keys. It must not contain
-  service credentials or protocol private keys.
+- Public project configuration can contain one `OPEN_E2EE_RELAY_URL` deployment
+  connection. The URL can resolve public bootstrap data. It must not contain a
+  service credential, protocol private key, or secret query value.
 - The npm launcher selects an installed optional native package. It does not
   download or execute a binary during package installation.
 
