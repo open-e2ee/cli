@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,8 +63,19 @@ func TestLoadAcceptsJSONC(t *testing.T) {
 }
 
 func TestEnvironmentUsesOneRelayConnectionURL(t *testing.T) {
-	path := filepath.Join(t.TempDir(), Filename)
-	contents := `{
+	for name, urls := range map[string][2]string{
+		"customer": {
+			"https://development.relay.open-e2ee.dev/v1/connection/public-locator",
+			"https://relay.open-e2ee.dev/v1/connection/public-locator",
+		},
+		"staging": {
+			"https://staging-customer-development.relay.open-e2ee.dev/v1/connection/public-locator",
+			"https://staging.relay.open-e2ee.dev/v1/connection/public-locator",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), Filename)
+			contents := fmt.Sprintf(`{
   "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
   "project": "url-only-chat",
   "writer": "config",
@@ -71,21 +83,55 @@ func TestEnvironmentUsesOneRelayConnectionURL(t *testing.T) {
   "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d" },
   "environments": {
     "development": {
-      "relayUrl": "https://development.relay.open-e2ee.dev/v1/connection/public-locator",
+      "relayUrl": %q,
       "relay": { "deliveryRetention": "1d", "attachmentRetention": "1d" }
     },
-    "production": { "relayUrl": "https://relay.open-e2ee.dev/v1/connection/public-locator" }
+    "production": { "relayUrl": %q }
   }
-}`
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		t.Fatal(err)
+			}`, urls[0], urls[1])
+			if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			value, err := Load(path)
+			if err != nil {
+				t.Fatalf("one Relay connection URL was rejected: %v", err)
+			}
+			if value.Environments["development"].RelayURL == "" || value.Environments["production"].RelayURL == "" {
+				t.Fatal("Relay connection URL was not retained")
+			}
+		})
 	}
-	value, err := Load(path)
-	if err != nil {
-		t.Fatalf("one Relay connection URL was rejected: %v", err)
-	}
-	if value.Environments["development"].RelayURL == "" || value.Environments["production"].RelayURL == "" {
-		t.Fatal("Relay connection URL was not retained")
+}
+
+func TestEnvironmentRejectsCrossedRelayConnectionURL(t *testing.T) {
+	for name, crossed := range map[string]struct {
+		environment string
+		url         string
+	}{
+		"customer development to production": {
+			environment: "development",
+			url:         "https://relay.open-e2ee.dev/v1/connection/public-locator",
+		},
+		"customer production to development": {
+			environment: "production",
+			url:         "https://development.relay.open-e2ee.dev/v1/connection/public-locator",
+		},
+		"staging development to production": {
+			environment: "development",
+			url:         "https://staging.relay.open-e2ee.dev/v1/connection/public-locator",
+		},
+		"staging production to development": {
+			environment: "production",
+			url:         "https://staging-customer-development.relay.open-e2ee.dev/v1/connection/public-locator",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := New("crossed-host")
+			value.Environments[crossed.environment] = Environment{RelayURL: crossed.url}
+			if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "belongs to another environment") {
+				t.Fatalf("want crossed environment error, got %v", err)
+			}
+		})
 	}
 }
 
