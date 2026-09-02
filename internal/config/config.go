@@ -189,12 +189,16 @@ func validateRelayURL(environment, value string) error {
 	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != value || !relayConnectionPath.MatchString(parsed.EscapedPath()) {
 		return errors.New("must be an environment-scoped Managed Relay connection URL")
 	}
-	expectedHost := "relay.open-e2ee.dev"
+	hostMatchesEnvironment :=
+		parsed.Host == "relay.open-e2ee.dev" ||
+			parsed.Host == "staging.relay.open-e2ee.dev"
 	if environment == "development" {
-		expectedHost = "development.relay.open-e2ee.dev"
+		hostMatchesEnvironment =
+			parsed.Host == "development.relay.open-e2ee.dev" ||
+				parsed.Host == "staging-customer-development.relay.open-e2ee.dev"
 	}
-	if parsed.Host != expectedHost {
-		return fmt.Errorf("belongs to another environment; expected %s", expectedHost)
+	if !hostMatchesEnvironment {
+		return fmt.Errorf("belongs to another environment; expected a known %s Relay host", environment)
 	}
 	return nil
 }
