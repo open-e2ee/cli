@@ -187,7 +187,7 @@ var relayConnectionPath = regexp.MustCompile(`^/v1/connection/[A-Za-z0-9_-]{1,25
 func validateRelayURL(environment, value string) error {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != value || !relayConnectionPath.MatchString(parsed.EscapedPath()) {
-		return errors.New("must be an environment-scoped Managed Relay connection URL")
+		return errors.New("must be an environment-scoped Signal Protocol Relay connection URL")
 	}
 	hostMatchesEnvironment :=
 		parsed.Host == "relay.open-e2ee.dev" ||

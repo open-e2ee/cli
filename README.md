@@ -3,9 +3,9 @@
 `oe` initializes OpenE2EE projects, keeps public service policy in a deterministic
 file, and provides the command boundary for hosted Development and Production.
 
-OpenE2EE Relay provides managed encrypted delivery for the OpenE2EE Signal
-Protocol SDK. This public repository lets developers inspect the command,
-config, credential, and release contracts.
+The OpenE2EE Signal Protocol Relay provides hosted encrypted delivery, built to
+work with the OpenE2EE Signal Protocol SDK. This public repository lets
+developers inspect the command, config, credential, and release contracts.
 
 ## Local start
 
