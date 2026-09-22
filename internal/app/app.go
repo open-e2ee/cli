@@ -1105,8 +1105,8 @@ func slug(value string) string {
 
 func writeRelayEnvironment(directory, filename, relayURL string) error {
 	const variable = "OPEN_E2EE_RELAY_URL"
-	const configuredComment = "# Public Managed Relay connection. This is not a credential."
-	const unconfiguredComment = "# Managed Relay connection is not configured for this environment."
+	const configuredComment = "# Public Signal Protocol Relay connection. This is not a credential."
+	const unconfiguredComment = "# Signal Protocol Relay connection is not configured for this environment."
 	path := filepath.Join(directory, filename)
 	contents, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
