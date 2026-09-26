@@ -13,7 +13,7 @@
   ],
   "dependencies": {
     "@open-e2ee/cli": "1.0.0",
-    "@open-e2ee/signal-protocol-sdk": "^7.0.0"
+    "@open-e2ee/signal-protocol-sdk": "^7.1.0"
   },
   "engines": {
     "node": ">=20"
