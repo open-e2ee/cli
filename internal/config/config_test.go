@@ -65,12 +65,12 @@ func TestLoadAcceptsJSONC(t *testing.T) {
 func TestEnvironmentUsesOneRelayConnectionURL(t *testing.T) {
 	for name, urls := range map[string][2]string{
 		"customer": {
-			"https://development.relay.open-e2ee.dev/v1/connection/public-locator",
-			"https://relay.open-e2ee.dev/v1/connection/public-locator",
+			"https://sandbox.relay.open-e2ee.dev/signal/v1/connection/public-locator",
+			"https://relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
 		"staging": {
-			"https://staging-customer-development.relay.open-e2ee.dev/v1/connection/public-locator",
-			"https://staging.relay.open-e2ee.dev/v1/connection/public-locator",
+			"https://stage-sandbox.relay.open-e2ee.dev/signal/v1/connection/public-locator",
+			"https://stage.relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -110,19 +110,19 @@ func TestEnvironmentRejectsCrossedRelayConnectionURL(t *testing.T) {
 	}{
 		"customer development to production": {
 			environment: "development",
-			url:         "https://relay.open-e2ee.dev/v1/connection/public-locator",
+			url:         "https://relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
 		"customer production to development": {
 			environment: "production",
-			url:         "https://development.relay.open-e2ee.dev/v1/connection/public-locator",
+			url:         "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
 		"staging development to production": {
 			environment: "development",
-			url:         "https://staging.relay.open-e2ee.dev/v1/connection/public-locator",
+			url:         "https://stage.relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
 		"staging production to development": {
 			environment: "production",
-			url:         "https://staging-customer-development.relay.open-e2ee.dev/v1/connection/public-locator",
+			url:         "https://stage-sandbox.relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

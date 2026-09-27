@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	developmentRelayURL = "https://development.relay.open-e2ee.dev/v1/connection/pk_dev_public"
-	productionRelayURL  = "https://relay.open-e2ee.dev/v1/connection/pk_prod_public"
+	developmentRelayURL = "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/pk_dev_public"
+	productionRelayURL  = "https://relay.open-e2ee.dev/signal/v1/connection/pk_prod_public"
 )
 
 func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
@@ -174,11 +174,11 @@ func TestDoctorReportsSafeConnectionOriginAndRefusesProjectDrift(t *testing.T) {
 	})}
 	var stdout bytes.Buffer
 	exit := Run(context.Background(), []string{"--environment", "development", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit != 0 || !strings.Contains(stdout.String(), `"relayOrigin":"https://development.relay.open-e2ee.dev"`) || strings.Contains(stdout.String(), "pk_dev_public") {
+	if exit != 0 || !strings.Contains(stdout.String(), `"relayOrigin":"https://sandbox.relay.open-e2ee.dev"`) || strings.Contains(stdout.String(), "pk_dev_public") {
 		t.Fatalf("doctor did not report only the safe origin: %s", stdout.String())
 	}
 	api.getProject = func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-		return control.Project{Slug: "doctor-chat", Development: projectEnvironment("https://development.relay.open-e2ee.dev/v1/connection/another-project", "1")}, nil
+		return control.Project{Slug: "doctor-chat", Development: projectEnvironment("https://sandbox.relay.open-e2ee.dev/signal/v1/connection/another-project", "1")}, nil
 	}
 	stdout.Reset()
 	exit = Run(context.Background(), []string{"--environment", "development", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
@@ -292,10 +292,10 @@ func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	development := value.Environments["development"]
-	development.RelayURL = "https://development.relay.open-e2ee.dev/v1/connection/old-development"
+	development.RelayURL = "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/old-development"
 	value.Environments["development"] = development
 	production := value.Environments["production"]
-	production.RelayURL = "https://relay.open-e2ee.dev/v1/connection/old-production"
+	production.RelayURL = "https://relay.open-e2ee.dev/signal/v1/connection/old-production"
 	value.Environments["production"] = production
 	if err := config.Write(path, value); err != nil {
 		t.Fatal(err)

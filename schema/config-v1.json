@@ -47,7 +47,7 @@
         "relayUrl": {
           "type": "string",
           "format": "uri",
-          "pattern": "^https://(?:development\\.)?relay\\.open-e2ee\\.dev/v1/connection/[A-Za-z0-9_-]{1,255}$"
+          "pattern": "^https://(?:sandbox\\.)?relay\\.open-e2ee\\.dev/signal/v1/connection/[A-Za-z0-9_-]{1,255}$"
         },
         "relay": { "$ref": "#/$defs/relayPolicy" }
       }

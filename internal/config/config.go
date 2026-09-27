@@ -182,7 +182,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
-var relayConnectionPath = regexp.MustCompile(`^/v1/connection/[A-Za-z0-9_-]{1,255}$`)
+var relayConnectionPath = regexp.MustCompile(`^/signal/v1/connection/[A-Za-z0-9_-]{1,255}$`)
 
 func validateRelayURL(environment, value string) error {
 	parsed, err := url.Parse(value)
@@ -191,11 +191,11 @@ func validateRelayURL(environment, value string) error {
 	}
 	hostMatchesEnvironment :=
 		parsed.Host == "relay.open-e2ee.dev" ||
-			parsed.Host == "staging.relay.open-e2ee.dev"
+			parsed.Host == "stage.relay.open-e2ee.dev"
 	if environment == "development" {
 		hostMatchesEnvironment =
-			parsed.Host == "development.relay.open-e2ee.dev" ||
-				parsed.Host == "staging-customer-development.relay.open-e2ee.dev"
+			parsed.Host == "sandbox.relay.open-e2ee.dev" ||
+				parsed.Host == "stage-sandbox.relay.open-e2ee.dev"
 	}
 	if !hostMatchesEnvironment {
 		return fmt.Errorf("belongs to another environment; expected a known %s Relay host", environment)
