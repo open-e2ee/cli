@@ -148,7 +148,7 @@ func TestMutationsCarryBearerAndIdempotencyHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.BootstrapDevelopment(context.Background(), CredentialRequest{AccessToken: "secret-token", OperationID: "operation-1"}, BootstrapRequest{ProjectSlug: "chat", Writer: "config"})
+	_, err = client.BootstrapSandbox(context.Background(), CredentialRequest{AccessToken: "secret-token", OperationID: "operation-1"}, BootstrapRequest{ProjectSlug: "chat", Writer: "config"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,12 +163,12 @@ func TestNotificationConfigurationUsesExactEnvironmentAndVersion(t *testing.T) {
 		}
 		response.Header().Set("Content-Type", "application/json")
 		if request.Method == http.MethodGet {
-			if request.URL.Query().Get("environment") != "development" {
+			if request.URL.Query().Get("environment") != "sandbox" {
 				t.Fatalf("environment query was lost: %s", request.URL.RawQuery)
 			}
 			json.NewEncoder(response).Encode(NotificationConfiguration{
 				AllowedProfiles:      []NotificationProfile{NotificationBackgroundOnly},
-				ConfigurationVersion: 4, Environment: "development", Providers: []string{"apns"},
+				ConfigurationVersion: 4, Environment: "sandbox", Providers: []string{"apns"},
 			})
 			return
 		}
@@ -179,12 +179,12 @@ func TestNotificationConfigurationUsesExactEnvironmentAndVersion(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 			t.Fatal(err)
 		}
-		if input.ExpectedConfigurationVersion != 4 || input.Environment != "development" || len(input.AllowedProfiles) != 2 {
+		if input.ExpectedConfigurationVersion != 4 || input.Environment != "sandbox" || len(input.AllowedProfiles) != 2 {
 			t.Fatalf("unexpected notification request: %#v", input)
 		}
 		json.NewEncoder(response).Encode(NotificationConfiguration{
 			AllowedProfiles: input.AllowedProfiles, ConfigurationVersion: 5,
-			Environment: "development", Providers: []string{"apns"},
+			Environment: "sandbox", Providers: []string{"apns"},
 		})
 	}))
 	defer server.Close()
@@ -192,13 +192,13 @@ func TestNotificationConfigurationUsesExactEnvironmentAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := client.Notifications(context.Background(), CredentialRequest{}, "chat", "development")
+	current, err := client.Notifications(context.Background(), CredentialRequest{}, "chat", "sandbox")
 	if err != nil || current.ConfigurationVersion != 4 {
 		t.Fatalf("notification read failed: %#v %v", current, err)
 	}
 	updated, err := client.ConfigureNotifications(context.Background(), CredentialRequest{OperationID: "notification-operation"}, "chat", NotificationConfigurationRequest{
 		AllowedProfiles: []NotificationProfile{NotificationBackgroundOnly, NotificationVisibleAlert},
-		Environment:     "development", ExpectedConfigurationVersion: current.ConfigurationVersion,
+		Environment:     "sandbox", ExpectedConfigurationVersion: current.ConfigurationVersion,
 	})
 	if err != nil || updated.ConfigurationVersion != 5 || calls != 2 {
 		t.Fatalf("notification write failed: %#v calls=%d %v", updated, calls, err)
@@ -248,7 +248,7 @@ func TestPostWithIdempotencyKeyRetriesTransientFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.BootstrapDevelopment(context.Background(), CredentialRequest{OperationID: "stable-operation"}, BootstrapRequest{ProjectSlug: "chat", Writer: "config"})
+	_, err = client.BootstrapSandbox(context.Background(), CredentialRequest{OperationID: "stable-operation"}, BootstrapRequest{ProjectSlug: "chat", Writer: "config"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -282,7 +282,7 @@ func jwtExpiration(value string) (string, error) {
 	return time.Unix(claims.ExpiresAt, 0).UTC().Format(time.RFC3339), nil
 }
 
-func (c *Client) BootstrapDevelopment(ctx context.Context, credential CredentialRequest, request BootstrapRequest) (Bootstrap, error) {
+func (c *Client) BootstrapSandbox(ctx context.Context, credential CredentialRequest, request BootstrapRequest) (Bootstrap, error) {
 	var response Bootstrap
 	err := c.do(ctx, http.MethodPost, "/v1/projects/bootstrap", credential, request, &response)
 	return response, err

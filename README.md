@@ -1,7 +1,7 @@
 # OpenE2EE CLI
 
 `oe` initializes OpenE2EE projects, keeps public service policy in a deterministic
-file, and provides the command boundary for hosted Development and Production.
+file, and provides the command boundary for hosted Sandbox and Production.
 
 The OpenE2EE Signal Protocol Relay provides hosted encrypted delivery, built to
 work with the OpenE2EE Signal Protocol SDK. This public repository lets
@@ -32,7 +32,7 @@ round trip.
 ```text
 oe init       initialize public policy and the local encrypted example
 oe login      use browser authorization and store the result in the OS keychain
-oe dev        create the Development environment, install its Relay connection, and wait for acknowledgement
+oe sandbox    create the Sandbox environment, install its Relay connection, and wait for acknowledgement
 oe plan       show the production configuration change without applying it
 oe deploy     complete the production card gate, deploy, and install its Relay connection
 oe doctor     check project, environment, connection, credentials, and control-plane health
@@ -42,7 +42,7 @@ oe notifications stage and verify best-effort notification profiles
 
 Global `--json` emits one final JSON document. `--json-stream` emits
 newline-delimited progress and final events. `--environment` is an advanced
-override. Normal work uses development for `oe dev`. It uses production for
+override. Normal work uses sandbox for `oe sandbox`. It uses production for
 `oe plan` and `oe deploy`.
 
 ## Configuration ownership
@@ -61,8 +61,8 @@ Local mutation commands take an advisory project lock. Remote mutations include
 a stable idempotency key. Plans and deploys include the server's expected
 revision. A console-first project or a revision conflict fails closed.
 
-The config records the selected environment. Each selected environment stores one public `relayUrl`. `oe dev` writes the
-development value to `.env.local`. `oe deploy` writes the production value to
+The config records the selected environment. Each selected environment stores one public `relayUrl`. `oe sandbox` writes the
+sandbox value to `.env.local`. `oe deploy` writes the production value to
 `.env.production.local`. Both files use the semantic
 `OPEN_E2EE_RELAY_URL` setting. The commands add both files to `.gitignore`. The application
 does not select a Relay hostname or pair an endpoint with a second key.

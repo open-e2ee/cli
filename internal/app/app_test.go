@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	developmentRelayURL = "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/pk_dev_public"
-	productionRelayURL  = "https://relay.open-e2ee.dev/signal/v1/connection/pk_prod_public"
+	sandboxRelayURL    = "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/pk_sandbox_public"
+	productionRelayURL = "https://relay.open-e2ee.dev/signal/v1/connection/pk_prod_public"
 )
 
 func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
@@ -65,7 +65,7 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 	storeCredential(t, store, "project:write")
 	activationCalls := 0
 	api := &fakeAPI{
-		bootstrapDevelopment: func(_ context.Context, request control.CredentialRequest, bootstrap control.BootstrapRequest) (control.Bootstrap, error) {
+		bootstrapSandbox: func(_ context.Context, request control.CredentialRequest, bootstrap control.BootstrapRequest) (control.Bootstrap, error) {
 			if request.OperationID == "" {
 				t.Fatal("bootstrap omitted idempotency key")
 			}
@@ -73,8 +73,8 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 				t.Fatalf("unexpected writer %q", bootstrap.Writer)
 			}
 			return control.Bootstrap{
-				ProjectSlug: "managed-chat", Writer: "config", Environment: "development",
-				DevelopmentRelayURL: developmentRelayURL,
+				ProjectSlug: "managed-chat", Writer: "config", Environment: "sandbox",
+				SandboxRelayURL: sandboxRelayURL,
 			}, nil
 		},
 		activation: func(context.Context, control.CredentialRequest, string) (control.Activation, error) {
@@ -86,7 +86,7 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 		},
 	}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--environment", "development", "--json", "dev", "--timeout", "1s"}, Dependencies{
+	exit := Run(context.Background(), []string{"--environment", "sandbox", "--json", "sandbox", "--timeout", "1s"}, Dependencies{
 		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
 		Sleep: func(context.Context, time.Duration) error { return nil },
 	})
@@ -97,12 +97,12 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.Environments["development"].RelayURL != developmentRelayURL || value.Environments["production"].RelayURL != "" {
-		t.Fatalf("development Relay connection was not written in isolation: %#v", value.Environments)
+	if value.Environments["sandbox"].RelayURL != sandboxRelayURL || value.Environments["production"].RelayURL != "" {
+		t.Fatalf("sandbox Relay connection was not written in isolation: %#v", value.Environments)
 	}
 	environment, err := os.ReadFile(filepath.Join(directory, ".env.local"))
-	if err != nil || !strings.Contains(string(environment), "OPEN_E2EE_RELAY_URL="+developmentRelayURL) {
-		t.Fatalf("development environment was not installed: %q %v", environment, err)
+	if err != nil || !strings.Contains(string(environment), "OPEN_E2EE_RELAY_URL="+sandboxRelayURL) {
+		t.Fatalf("sandbox environment was not installed: %q %v", environment, err)
 	}
 	if activationCalls != 2 || !strings.Contains(stdout.String(), "firstAcknowledgedMessage") {
 		t.Fatalf("did not wait for first acknowledgement: calls=%d output=%s", activationCalls, stdout.String())
@@ -155,34 +155,34 @@ func TestDoctorReportsSafeConnectionOriginAndRefusesProjectDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	development := value.Environments["development"]
-	development.RelayURL = developmentRelayURL
-	value.Environments["development"] = development
+	sandbox := value.Environments["sandbox"]
+	sandbox.RelayURL = sandboxRelayURL
+	value.Environments["sandbox"] = sandbox
 	if err := config.Write(path, value); err != nil {
 		t.Fatal(err)
 	}
 	store := credential.NewMemory()
 	storeCredential(t, store, "project:read")
 	api := &fakeAPI{getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-		return control.Project{Slug: "doctor-chat", Development: projectEnvironment(developmentRelayURL, "1")}, nil
+		return control.Project{Slug: "doctor-chat", Sandbox: projectEnvironment(sandboxRelayURL, "1")}, nil
 	}}
 	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.String() != developmentRelayURL {
+		if request.URL.String() != sandboxRelayURL {
 			t.Fatalf("doctor requested an unexpected URL: %s", request.URL)
 		}
 		return &http.Response{Body: io.NopCloser(strings.NewReader(`{"schemaVersion":1}`)), Header: make(http.Header), StatusCode: http.StatusOK}, nil
 	})}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--environment", "development", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit != 0 || !strings.Contains(stdout.String(), `"relayOrigin":"https://sandbox.relay.open-e2ee.dev"`) || strings.Contains(stdout.String(), "pk_dev_public") {
+	exit := Run(context.Background(), []string{"--environment", "sandbox", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	if exit != 0 || !strings.Contains(stdout.String(), `"relayOrigin":"https://sandbox.relay.open-e2ee.dev"`) || strings.Contains(stdout.String(), "pk_sandbox_public") {
 		t.Fatalf("doctor did not report only the safe origin: %s", stdout.String())
 	}
 	api.getProject = func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-		return control.Project{Slug: "doctor-chat", Development: projectEnvironment("https://sandbox.relay.open-e2ee.dev/signal/v1/connection/another-project", "1")}, nil
+		return control.Project{Slug: "doctor-chat", Sandbox: projectEnvironment("https://sandbox.relay.open-e2ee.dev/signal/v1/connection/another-project", "1")}, nil
 	}
 	stdout.Reset()
-	exit = Run(context.Background(), []string{"--environment", "development", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit == 0 || !strings.Contains(stdout.String(), "stale or belongs to another project") || strings.Contains(stdout.String(), "pk_dev_public") {
+	exit = Run(context.Background(), []string{"--environment", "sandbox", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	if exit == 0 || !strings.Contains(stdout.String(), "stale or belongs to another project") || strings.Contains(stdout.String(), "pk_sandbox_public") {
 		t.Fatalf("doctor did not refuse project drift safely: %s", stdout.String())
 	}
 }
@@ -200,20 +200,20 @@ func TestNotificationsSetupStagesLocalAndRemoteProfile(t *testing.T) {
 	wrote := false
 	api := &fakeAPI{
 		notifications: func(_ context.Context, request control.CredentialRequest, project, environment string) (control.NotificationConfiguration, error) {
-			if request.AccessToken == "" || project != "notification-chat" || environment != "development" {
+			if request.AccessToken == "" || project != "notification-chat" || environment != "sandbox" {
 				t.Fatalf("notification read lost authority: %#v %s %s", request, project, environment)
 			}
 			return control.NotificationConfiguration{
 				AllowedProfiles:      []control.NotificationProfile{control.NotificationBackgroundOnly},
-				ConfigurationVersion: 2, Environment: "development", Providers: []string{"apns"},
+				ConfigurationVersion: 2, Environment: "sandbox", Providers: []string{"apns"},
 			}, nil
 		},
 		configureNotifications: func(_ context.Context, request control.CredentialRequest, project string, input control.NotificationConfigurationRequest) (control.NotificationConfiguration, error) {
 			wrote = true
-			if request.OperationID == "" || project != "notification-chat" || input.Environment != "development" || input.ExpectedConfigurationVersion != 2 || !hasNotificationProfile(input.AllowedProfiles, control.NotificationVisibleAlert) {
+			if request.OperationID == "" || project != "notification-chat" || input.Environment != "sandbox" || input.ExpectedConfigurationVersion != 2 || !hasNotificationProfile(input.AllowedProfiles, control.NotificationVisibleAlert) {
 				t.Fatalf("notification write lost concurrency contract: %#v %#v", request, input)
 			}
-			return control.NotificationConfiguration{AllowedProfiles: input.AllowedProfiles, ConfigurationVersion: 3, Environment: "development", Providers: []string{"apns"}}, nil
+			return control.NotificationConfiguration{AllowedProfiles: input.AllowedProfiles, ConfigurationVersion: 3, Environment: "sandbox", Providers: []string{"apns"}}, nil
 		},
 	}
 	var stdout bytes.Buffer
@@ -273,12 +273,12 @@ func TestConsoleWriterFailsBeforeRemoteMutation(t *testing.T) {
 	if err := config.Write(path, value); err != nil {
 		t.Fatal(err)
 	}
-	api := &fakeAPI{bootstrapDevelopment: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
+	api := &fakeAPI{bootstrapSandbox: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
 		t.Fatal("console-first project reached bootstrap mutation")
 		return control.Bootstrap{}, nil
 	}}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--environment", "development", "--json", "dev"}, Dependencies{API: api, Store: credential.NewMemory(), Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	exit := Run(context.Background(), []string{"--environment", "sandbox", "--json", "sandbox"}, Dependencies{API: api, Store: credential.NewMemory(), Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
 	if exit == 0 || !strings.Contains(stdout.String(), "console-first") {
 		t.Fatalf("console writer was not rejected: %s", stdout.String())
 	}
@@ -291,16 +291,16 @@ func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	development := value.Environments["development"]
-	development.RelayURL = "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/old-development"
-	value.Environments["development"] = development
+	sandbox := value.Environments["sandbox"]
+	sandbox.RelayURL = "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/old-sandbox"
+	value.Environments["sandbox"] = sandbox
 	production := value.Environments["production"]
 	production.RelayURL = "https://relay.open-e2ee.dev/signal/v1/connection/old-production"
 	value.Environments["production"] = production
 	if err := config.Write(path, value); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeRelayEnvironment(directory, ".env.local", development.RelayURL); err != nil {
+	if err := writeRelayEnvironment(directory, ".env.local", sandbox.RelayURL); err != nil {
 		t.Fatal(err)
 	}
 	if err := writeRelayEnvironment(directory, ".env.production.local", production.RelayURL); err != nil {
@@ -309,7 +309,7 @@ func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
 	store := credential.NewMemory()
 	storeCredential(t, store, "project:read")
 	api := &fakeAPI{getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-		return control.Project{Slug: "new-chat", Writer: "config", Development: projectEnvironment(developmentRelayURL, "1"), Production: projectEnvironment(productionRelayURL, "1")}, nil
+		return control.Project{Slug: "new-chat", Writer: "config", Sandbox: projectEnvironment(sandboxRelayURL, "1"), Production: projectEnvironment(productionRelayURL, "1")}, nil
 	}}
 	var stdout bytes.Buffer
 	exit := Run(context.Background(), []string{"--json", "project", "select", "new-chat"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
@@ -320,11 +320,11 @@ func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selected.Project != "new-chat" || selected.Environments["development"].RelayURL != developmentRelayURL || selected.Environments["production"].RelayURL != productionRelayURL {
+	if selected.Project != "new-chat" || selected.Environments["sandbox"].RelayURL != sandboxRelayURL || selected.Environments["production"].RelayURL != productionRelayURL {
 		t.Fatalf("project Relay connections were not replaced: %#v", selected)
 	}
 	for filename, expected := range map[string]string{
-		".env.local":            developmentRelayURL,
+		".env.local":            sandboxRelayURL,
 		".env.production.local": productionRelayURL,
 	} {
 		contents, err := os.ReadFile(filepath.Join(directory, filename))
@@ -364,7 +364,7 @@ func TestValidatePlanRejectsCrossBoundaryResponses(t *testing.T) {
 	for name, changed := range map[string]control.Plan{
 		"missing id":        {ProjectSlug: "project-one", Environment: "production", ExpectedRevision: "1"},
 		"wrong project":     {ID: "plan-1", ProjectSlug: "project-two", Environment: "production", ExpectedRevision: "1"},
-		"wrong environment": {ID: "plan-1", ProjectSlug: "project-one", Environment: "development", ExpectedRevision: "1"},
+		"wrong environment": {ID: "plan-1", ProjectSlug: "project-one", Environment: "sandbox", ExpectedRevision: "1"},
 		"stale revision":    {ID: "plan-1", ProjectSlug: "project-one", Environment: "production", ExpectedRevision: "0"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -384,12 +384,12 @@ func TestJSONOutputIsOneDocumentAfterAutomaticLogin(t *testing.T) {
 		pollAuthorization: func(context.Context, control.Authorization) (control.Token, error) {
 			return control.Token{AccessToken: "token"}, nil
 		},
-		bootstrapDevelopment: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
-			return control.Bootstrap{ProjectSlug: "login-dev", Writer: "config", Environment: "development", DevelopmentRelayURL: developmentRelayURL}, nil
+		bootstrapSandbox: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
+			return control.Bootstrap{ProjectSlug: "login-dev", Writer: "config", Environment: "sandbox", SandboxRelayURL: sandboxRelayURL}, nil
 		},
 	}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--environment", "development", "--json", "dev", "--no-wait"}, Dependencies{
+	exit := Run(context.Background(), []string{"--environment", "sandbox", "--json", "sandbox", "--no-wait"}, Dependencies{
 		API: api, Store: credential.NewMemory(), Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
 		OpenURL: func(string) error { return nil }, Sleep: func(context.Context, time.Duration) error { return nil },
 	})
@@ -505,7 +505,7 @@ type fakeAPI struct {
 	startAuthorization     func(context.Context, control.AuthorizationRequest) (control.Authorization, error)
 	pollAuthorization      func(context.Context, control.Authorization) (control.Token, error)
 	refreshAuthorization   func(context.Context, string) (control.Token, error)
-	bootstrapDevelopment   func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error)
+	bootstrapSandbox       func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error)
 	activation             func(context.Context, control.CredentialRequest, string) (control.Activation, error)
 	plan                   func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error)
 	deploy                 func(context.Context, control.CredentialRequest, control.DeployRequest) (control.Deployment, error)
@@ -539,11 +539,11 @@ func (f *fakeAPI) RefreshAuthorization(ctx context.Context, refreshToken string)
 	}
 	return f.refreshAuthorization(ctx, refreshToken)
 }
-func (f *fakeAPI) BootstrapDevelopment(ctx context.Context, credential control.CredentialRequest, request control.BootstrapRequest) (control.Bootstrap, error) {
-	if f.bootstrapDevelopment == nil {
-		return control.Bootstrap{}, errors.New("unexpected BootstrapDevelopment")
+func (f *fakeAPI) BootstrapSandbox(ctx context.Context, credential control.CredentialRequest, request control.BootstrapRequest) (control.Bootstrap, error) {
+	if f.bootstrapSandbox == nil {
+		return control.Bootstrap{}, errors.New("unexpected BootstrapSandbox")
 	}
-	return f.bootstrapDevelopment(ctx, credential, request)
+	return f.bootstrapSandbox(ctx, credential, request)
 }
 func (f *fakeAPI) Activation(ctx context.Context, credential control.CredentialRequest, project string) (control.Activation, error) {
 	if f.activation == nil {

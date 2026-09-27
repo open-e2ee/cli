@@ -7,7 +7,7 @@ type API interface {
 	StartAuthorization(context.Context, AuthorizationRequest) (Authorization, error)
 	PollAuthorization(context.Context, Authorization) (Token, error)
 	RefreshAuthorization(context.Context, string) (Token, error)
-	BootstrapDevelopment(context.Context, CredentialRequest, BootstrapRequest) (Bootstrap, error)
+	BootstrapSandbox(context.Context, CredentialRequest, BootstrapRequest) (Bootstrap, error)
 	Activation(context.Context, CredentialRequest, string) (Activation, error)
 	Plan(context.Context, CredentialRequest, PlanRequest) (Plan, error)
 	Deploy(context.Context, CredentialRequest, DeployRequest) (Deployment, error)
@@ -48,12 +48,12 @@ type BootstrapRequest struct {
 }
 
 type Bootstrap struct {
-	ProjectID           string `json:"projectId"`
-	ProjectSlug         string `json:"project"`
-	Writer              string `json:"writer"`
-	Revision            string `json:"revision"`
-	DevelopmentRelayURL string `json:"developmentRelayUrl"`
-	Environment         string `json:"environment"`
+	ProjectID       string `json:"projectId"`
+	ProjectSlug     string `json:"project"`
+	Writer          string `json:"writer"`
+	Revision        string `json:"revision"`
+	SandboxRelayURL string `json:"sandboxRelayUrl"`
+	Environment     string `json:"environment"`
 }
 
 type Activation struct {
@@ -105,10 +105,10 @@ type Deployment struct {
 }
 
 type Project struct {
-	Development *ProjectEnvironment `json:"development,omitempty"`
-	Production  *ProjectEnvironment `json:"production,omitempty"`
-	Slug        string              `json:"slug"`
-	Writer      string              `json:"writer"`
+	Sandbox    *ProjectEnvironment `json:"sandbox,omitempty"`
+	Production *ProjectEnvironment `json:"production,omitempty"`
+	Slug       string              `json:"slug"`
+	Writer     string              `json:"writer"`
 }
 
 type ProjectEnvironment struct {

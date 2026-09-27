@@ -25,10 +25,10 @@ func TestJSONNeverSerializesAnUnrequestedEmptyDataObject(t *testing.T) {
 func TestJSONStreamEmitsProgressAndTerminalEvents(t *testing.T) {
 	var buffer bytes.Buffer
 	writer := New(JSONStream, &buffer)
-	if err := writer.Progress("dev", "waiting", nil); err != nil {
+	if err := writer.Progress("sandbox", "waiting", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Success("dev", "ready", nil); err != nil {
+	if err := writer.Success("sandbox", "ready", nil); err != nil {
 		t.Fatal(err)
 	}
 	decoder := json.NewDecoder(&buffer)

@@ -16,14 +16,14 @@
     "$schema": { "const": "https://open-e2ee.dev/schemas/config/v1.json" },
     "project": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
     "writer": { "enum": ["config", "console"] },
-    "selectedEnvironment": { "enum": ["development", "production"] },
+    "selectedEnvironment": { "enum": ["sandbox", "production"] },
     "relay": { "$ref": "#/$defs/relayPolicy" },
     "environments": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["development", "production"],
+      "required": ["sandbox", "production"],
       "properties": {
-        "development": { "$ref": "#/$defs/environment" },
+        "sandbox": { "$ref": "#/$defs/environment" },
         "production": { "$ref": "#/$defs/environment" }
       }
     }

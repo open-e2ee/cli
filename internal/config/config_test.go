@@ -47,10 +47,10 @@ func TestLoadAcceptsJSONC(t *testing.T) {
   "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
   "project": "jsonc-chat", // project comment
   "writer": "config",
-  "selectedEnvironment": "development",
+  "selectedEnvironment": "sandbox",
   "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d", },
   "environments": {
-    "development": { "relay": { "deliveryRetention": "1d", "attachmentRetention": "1d" } },
+    "sandbox": { "relay": { "deliveryRetention": "1d", "attachmentRetention": "1d" } },
     "production": {}
   },
 }`
@@ -82,7 +82,7 @@ func TestEnvironmentUsesOneRelayConnectionURL(t *testing.T) {
   "selectedEnvironment": "production",
   "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d" },
   "environments": {
-    "development": {
+    "sandbox": {
       "relayUrl": %q,
       "relay": { "deliveryRetention": "1d", "attachmentRetention": "1d" }
     },
@@ -96,7 +96,7 @@ func TestEnvironmentUsesOneRelayConnectionURL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("one Relay connection URL was rejected: %v", err)
 			}
-			if value.Environments["development"].RelayURL == "" || value.Environments["production"].RelayURL == "" {
+			if value.Environments["sandbox"].RelayURL == "" || value.Environments["production"].RelayURL == "" {
 				t.Fatal("Relay connection URL was not retained")
 			}
 		})
@@ -108,19 +108,19 @@ func TestEnvironmentRejectsCrossedRelayConnectionURL(t *testing.T) {
 		environment string
 		url         string
 	}{
-		"customer development to production": {
-			environment: "development",
+		"customer sandbox to production": {
+			environment: "sandbox",
 			url:         "https://relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
-		"customer production to development": {
+		"customer production to sandbox": {
 			environment: "production",
 			url:         "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
-		"staging development to production": {
-			environment: "development",
+		"staging sandbox to production": {
+			environment: "sandbox",
 			url:         "https://stage.relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
-		"staging production to development": {
+		"staging production to sandbox": {
 			environment: "production",
 			url:         "https://stage-sandbox.relay.open-e2ee.dev/signal/v1/connection/public-locator",
 		},
@@ -149,9 +149,9 @@ func TestLoadRejectsSecretFields(t *testing.T) {
   "$schema": "https://open-e2ee.dev/schemas/config/v1.json",
   "project": "safe-chat",
   "writer": "config",
-  "selectedEnvironment": "development",
+  "selectedEnvironment": "sandbox",
   "relay": { "deliveryRetention": "30d", "attachmentRetention": "30d" },
-  "environments": { "development": {}, "production": {} },
+  "environments": { "sandbox": {}, "production": {} },
   "apiSecret": "must-not-be-here"
 }`
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
@@ -171,12 +171,12 @@ func TestValidateProjectSlug(t *testing.T) {
 	}
 }
 
-func TestDevelopmentRetentionCannotExceedSevenDays(t *testing.T) {
-	value := New("bounded-development")
-	value.Environments["development"] = Environment{Relay: &RelayPolicy{
+func TestSandboxRetentionCannotExceedSevenDays(t *testing.T) {
+	value := New("bounded-sandbox")
+	value.Environments["sandbox"] = Environment{Relay: &RelayPolicy{
 		DeliveryRetention: "14d", AttachmentRetention: "7d",
 	}}
 	if err := value.Validate(); err == nil || !strings.Contains(err.Error(), "managed maximum") {
-		t.Fatalf("development retention above seven days was accepted: %v", err)
+		t.Fatalf("sandbox retention above seven days was accepted: %v", err)
 	}
 }
