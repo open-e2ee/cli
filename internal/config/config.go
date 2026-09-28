@@ -39,7 +39,7 @@ type Environment struct {
 }
 
 func (c Config) RelayPolicyFor(environment string) (RelayPolicy, error) {
-	if environment != "development" && environment != "production" {
+	if environment != "sandbox" && environment != "production" {
 		return RelayPolicy{}, fmt.Errorf("unsupported environment %q", environment)
 	}
 	selected, ok := c.Environments[environment]
@@ -69,14 +69,14 @@ func New(project string) Config {
 		Schema:              SchemaURL,
 		Project:             project,
 		Writer:              "config",
-		SelectedEnvironment: "development",
+		SelectedEnvironment: "sandbox",
 		Relay: RelayPolicy{
 			DeliveryRetention:   "30d",
 			AttachmentRetention: "30d",
 		},
 		Environments: map[string]Environment{
-			"development": {Relay: &RelayPolicy{DeliveryRetention: "1d", AttachmentRetention: "1d"}},
-			"production":  {},
+			"sandbox":    {Relay: &RelayPolicy{DeliveryRetention: "1d", AttachmentRetention: "1d"}},
+			"production": {},
 		},
 	}
 }
@@ -128,16 +128,16 @@ func (c Config) Validate() error {
 	if c.Writer != "config" && c.Writer != "console" {
 		return errors.New("writer must be config or console")
 	}
-	if c.SelectedEnvironment != "development" && c.SelectedEnvironment != "production" {
-		return errors.New("selectedEnvironment must be development or production")
+	if c.SelectedEnvironment != "sandbox" && c.SelectedEnvironment != "production" {
+		return errors.New("selectedEnvironment must be sandbox or production")
 	}
-	for _, name := range []string{"development", "production"} {
+	for _, name := range []string{"sandbox", "production"} {
 		if _, ok := c.Environments[name]; !ok {
 			return fmt.Errorf("environments.%s is required", name)
 		}
 	}
 	for name, environment := range c.Environments {
-		if name != "development" && name != "production" {
+		if name != "sandbox" && name != "production" {
 			return fmt.Errorf("unsupported environment %q", name)
 		}
 		if environment.Relay != nil {
@@ -160,13 +160,13 @@ func (c Config) Validate() error {
 	if err := validateRetention(c.Relay.AttachmentRetention); err != nil {
 		return fmt.Errorf("relay.attachmentRetention: %w", err)
 	}
-	for _, name := range []string{"development", "production"} {
+	for _, name := range []string{"sandbox", "production"} {
 		policy, err := c.RelayPolicyFor(name)
 		if err != nil {
 			return err
 		}
 		maximum := 30 * 24 * 60 * 60
-		if name == "development" {
+		if name == "sandbox" {
 			maximum = 7 * 24 * 60 * 60
 		}
 		for field, value := range map[string]string{
@@ -182,7 +182,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
-var relayConnectionPath = regexp.MustCompile(`^/v1/connection/[A-Za-z0-9_-]{1,255}$`)
+var relayConnectionPath = regexp.MustCompile(`^/signal/v1/connection/[A-Za-z0-9_-]{1,255}$`)
 
 func validateRelayURL(environment, value string) error {
 	parsed, err := url.Parse(value)
@@ -191,11 +191,11 @@ func validateRelayURL(environment, value string) error {
 	}
 	hostMatchesEnvironment :=
 		parsed.Host == "relay.open-e2ee.dev" ||
-			parsed.Host == "staging.relay.open-e2ee.dev"
-	if environment == "development" {
+			parsed.Host == "stage.relay.open-e2ee.dev"
+	if environment == "sandbox" {
 		hostMatchesEnvironment =
-			parsed.Host == "development.relay.open-e2ee.dev" ||
-				parsed.Host == "staging-customer-development.relay.open-e2ee.dev"
+			parsed.Host == "sandbox.relay.open-e2ee.dev" ||
+				parsed.Host == "stage-sandbox.relay.open-e2ee.dev"
 	}
 	if !hostMatchesEnvironment {
 		return fmt.Errorf("belongs to another environment; expected a known %s Relay host", environment)

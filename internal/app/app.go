@@ -28,7 +28,7 @@ import (
 
 const defaultControlURL = "https://console.open-e2ee.dev/api/cli"
 
-var commands = []string{"init", "login", "dev", "deploy", "plan", "doctor", "project", "notifications"}
+var commands = []string{"init", "login", "sandbox", "deploy", "plan", "doctor", "project", "notifications"}
 
 type Dependencies struct {
 	API        control.API
@@ -146,8 +146,8 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 		return r.init(args)
 	case "login":
 		return r.login(ctx, args)
-	case "dev":
-		return r.dev(ctx, args)
+	case "sandbox":
+		return r.sandbox(ctx, args)
 	case "plan":
 		return r.plan(ctx, args)
 	case "deploy":
@@ -167,7 +167,7 @@ func (r *runner) commandHelp(command string) error {
 	usage := map[string]string{
 		"init":          "oe init [--directory PATH] [--name PROJECT] [--force]",
 		"login":         "oe login [--timeout DURATION]",
-		"dev":           "oe dev [--timeout DURATION] [--no-wait]",
+		"sandbox":       "oe sandbox [--timeout DURATION] [--no-wait]",
 		"plan":          "oe plan",
 		"deploy":        "oe deploy [--confirm]",
 		"doctor":        "oe doctor",
@@ -298,8 +298,8 @@ func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (c
 	}
 }
 
-func (r *runner) dev(ctx context.Context, args []string) error {
-	flags := newFlags("dev")
+func (r *runner) sandbox(ctx context.Context, args []string) error {
+	flags := newFlags("sandbox")
 	timeout := flags.Duration("timeout", 30*time.Minute, "first acknowledgement timeout")
 	noWait := flags.Bool("no-wait", false, "do not wait for the first acknowledgement")
 	if err := flags.Parse(args); err != nil {
@@ -310,7 +310,7 @@ func (r *runner) dev(ctx context.Context, args []string) error {
 		return err
 	}
 	if value.Writer != "config" {
-		return errors.New("this project is console-first; change writer mode before oe dev can write policy")
+		return errors.New("this project is console-first; change writer mode before oe sandbox can write policy")
 	}
 	lock, err := projectlock.Acquire(ctx, filepath.Dir(path))
 	if err != nil {
@@ -325,35 +325,35 @@ func (r *runner) dev(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	policy, err := controlPolicy(value, "development")
+	policy, err := controlPolicy(value, "sandbox")
 	if err != nil {
 		return err
 	}
-	bootstrap, err := r.api.BootstrapDevelopment(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.BootstrapRequest{
+	bootstrap, err := r.api.BootstrapSandbox(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.BootstrapRequest{
 		Policy: policy, ProjectSlug: value.Project, Writer: value.Writer,
 	})
 	if err != nil {
 		return err
 	}
-	if bootstrap.Writer != "config" || bootstrap.ProjectSlug != value.Project || bootstrap.Environment != "development" {
+	if bootstrap.Writer != "config" || bootstrap.ProjectSlug != value.Project || bootstrap.Environment != "sandbox" {
 		return errors.New("control API returned a bootstrap for a different project, writer, or environment")
 	}
-	if bootstrap.DevelopmentRelayURL == "" {
-		return errors.New("control API returned an incomplete development Relay connection")
+	if bootstrap.SandboxRelayURL == "" {
+		return errors.New("control API returned an incomplete sandbox Relay connection")
 	}
-	development := value.Environments["development"]
-	development.RelayURL = bootstrap.DevelopmentRelayURL
-	value.Environments["development"] = development
-	value.SelectedEnvironment = "development"
+	sandbox := value.Environments["sandbox"]
+	sandbox.RelayURL = bootstrap.SandboxRelayURL
+	value.Environments["sandbox"] = sandbox
+	value.SelectedEnvironment = "sandbox"
 	if err := config.Write(path, value); err != nil {
 		return err
 	}
-	if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", bootstrap.DevelopmentRelayURL); err != nil {
+	if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", bootstrap.SandboxRelayURL); err != nil {
 		return err
 	}
-	_ = r.out.Progress("dev", "The Development environment is ready. Connect the first device.", map[string]any{"environment": "development"})
+	_ = r.out.Progress("sandbox", "The Sandbox environment is ready. Connect the first device.", map[string]any{"environment": "sandbox"})
 	if *noWait {
-		return r.out.Success("dev", "The Development environment is ready. First-acknowledgement waiting was skipped.", map[string]any{"environment": "development", "waiting": false})
+		return r.out.Success("sandbox", "The Sandbox environment is ready. First-acknowledgement waiting was skipped.", map[string]any{"environment": "sandbox", "waiting": false})
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
@@ -363,8 +363,8 @@ func (r *runner) dev(ctx context.Context, args []string) error {
 			return err
 		}
 		if state.FirstDevice && state.FirstAcknowledged {
-			return r.out.Success("dev", "The first managed message was acknowledged.", map[string]any{
-				"environment": "development", "firstDevice": true, "firstAcknowledgedMessage": true,
+			return r.out.Success("sandbox", "The first managed message was acknowledged.", map[string]any{
+				"environment": "sandbox", "firstDevice": true, "firstAcknowledgedMessage": true,
 			})
 		}
 		if err := r.sleep(waitCtx, 2*time.Second); err != nil {
@@ -412,7 +412,7 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 		return err
 	}
 	if r.environment != "production" {
-		return errors.New("oe deploy targets production; use oe dev for development")
+		return errors.New("oe deploy targets production; use oe sandbox for the Sandbox environment")
 	}
 	value, project, access, err := r.deployContext(ctx, "deploy:write")
 	if err != nil {
@@ -507,7 +507,7 @@ func (r *runner) doctor(ctx context.Context, args []string) error {
 	}
 	local := value.Environments[r.environment].RelayURL
 	if local == "" {
-		command := "oe dev"
+		command := "oe sandbox"
 		if r.environment == "production" {
 			command = "oe deploy"
 		}
@@ -525,8 +525,8 @@ func (r *runner) doctor(ctx context.Context, args []string) error {
 		return fmt.Errorf("doctor found a problem: project authority: %w", err)
 	}
 	expected := ""
-	if project.Development != nil {
-		expected = project.Development.RelayURL
+	if project.Sandbox != nil {
+		expected = project.Sandbox.RelayURL
 	}
 	if r.environment == "production" {
 		expected = ""
@@ -600,13 +600,13 @@ func (r *runner) project(ctx context.Context, args []string) error {
 		defer lock.Release()
 		value.Project = project.Slug
 		value.Writer = project.Writer
-		development := value.Environments["development"]
-		if project.Development != nil {
-			development.RelayURL = project.Development.RelayURL
+		sandbox := value.Environments["sandbox"]
+		if project.Sandbox != nil {
+			sandbox.RelayURL = project.Sandbox.RelayURL
 		} else {
-			development.RelayURL = ""
+			sandbox.RelayURL = ""
 		}
-		value.Environments["development"] = development
+		value.Environments["sandbox"] = sandbox
 		production := value.Environments["production"]
 		if project.Production != nil {
 			production.RelayURL = project.Production.RelayURL
@@ -617,7 +617,7 @@ func (r *runner) project(ctx context.Context, args []string) error {
 		if err := config.Write(path, value); err != nil {
 			return err
 		}
-		if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", development.RelayURL); err != nil {
+		if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", sandbox.RelayURL); err != nil {
 			return err
 		}
 		if err := writeRelayEnvironment(filepath.Dir(path), ".env.production.local", production.RelayURL); err != nil {
@@ -860,8 +860,8 @@ func validatePlan(plan control.Plan, project control.Project, environment string
 		return errors.New("control API returned a plan for a different environment")
 	}
 	expectedRevision := "0"
-	if environment == "development" && project.Development != nil {
-		expectedRevision = project.Development.Revision
+	if environment == "sandbox" && project.Sandbox != nil {
+		expectedRevision = project.Sandbox.Revision
 	}
 	if environment == "production" && project.Production != nil {
 		expectedRevision = project.Production.Revision
@@ -985,8 +985,8 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 			if strings.HasPrefix(args[0], "-") && args[0] != "--help" && args[0] != "--version" {
 				return options, "", nil, fmt.Errorf("unknown global flag %q", args[0])
 			}
-			if options.environmentExplicit && options.environment != "development" && options.environment != "production" {
-				return options, "", nil, errors.New("--environment must be development or production")
+			if options.environmentExplicit && options.environment != "sandbox" && options.environment != "production" {
+				return options, "", nil, errors.New("--environment must be sandbox or production")
 			}
 			return options, args[0], args[1:], nil
 		}
@@ -998,8 +998,8 @@ func defaultEnvironment(command, directory string) string {
 	switch command {
 	case "plan", "deploy":
 		return "production"
-	case "dev":
-		return "development"
+	case "sandbox":
+		return "sandbox"
 	}
 	path, err := config.Find(directory)
 	if err == nil {
@@ -1008,7 +1008,7 @@ func defaultEnvironment(command, directory string) string {
 			return value.SelectedEnvironment
 		}
 	}
-	return "development"
+	return "sandbox"
 }
 
 func containsHelp(args []string) bool {

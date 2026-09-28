@@ -6,7 +6,7 @@
     "commands": [
       "init",
       "login",
-      "dev",
+      "sandbox",
       "deploy",
       "plan",
       "doctor",
