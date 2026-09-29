@@ -6,7 +6,6 @@ require (
 	github.com/gofrs/flock v0.13.0
 	github.com/tidwall/jsonc v0.3.3
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/term v0.45.0
 )
 
 require (
