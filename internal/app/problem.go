@@ -42,12 +42,13 @@ func unknownCommand(name string) error {
 }
 
 func loginRequired(code, message string, cause error) error {
-	return &problem{code: code, message: message, next: "oe login", exit: exitAuthentication, cause: cause}
+	return &problem{code: code, message: message, next: "oe auth login", exit: exitAuthentication, cause: cause}
 }
 
 // classify gives every error that reaches Run a code and an exit status. A
 // control API refusal keeps the code that the console sent. A temporary failure
-// exits 6, and its next is the command line of the run.
+// exits 6, and its next is the command line of the run. A terms refusal exits
+// 5: a person must accept, or an administrator must.
 func classify(err error, commandLine string) *problem {
 	if known, ok := errors.AsType[*problem](err); ok {
 		return known
@@ -57,10 +58,21 @@ func classify(err error, commandLine string) *problem {
 		switch {
 		case refusal.Status == http.StatusUnauthorized || refusal.Code == "AUTHENTICATION_REQUIRED" || refusal.Code == "INVALID_SESSION":
 			result.code = cmp.Or(refusal.Code, "AUTHENTICATION_REQUIRED")
-			result.next = "oe login"
+			result.next = "oe auth login"
 			result.exit = exitAuthentication
 		case refusal.Code == "ORGANIZATION_REQUIRED":
-			result.next = "oe login"
+			result.next = "oe auth login"
+		case refusal.Code == "TERMS_REQUIRED":
+			result.exit = exitPersonAction
+			result.data = map[string]any{
+				"canAccept": refusal.CanAccept, "documents": termsDocuments(refusal.Documents),
+				"retry": commandLine,
+			}
+			if refusal.CanAccept {
+				result.next = "oe auth login --accept-terms"
+			}
+		case refusal.Code == "TERMS_PERMISSION_REQUIRED":
+			result.exit = exitPersonAction
 		case refusal.Code == "AUTHORITY_UNAVAILABLE", refusal.Status == http.StatusTooManyRequests,
 			refusal.Status == http.StatusBadGateway, refusal.Status == http.StatusServiceUnavailable,
 			refusal.Status == http.StatusGatewayTimeout:

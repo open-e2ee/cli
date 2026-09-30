@@ -22,9 +22,11 @@ type Client struct {
 }
 
 type apiError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Error   string `json:"error"`
+	Code      string          `json:"code"`
+	Message   string          `json:"message"`
+	Error     string          `json:"error"`
+	CanAccept bool            `json:"canAccept"`
+	Documents []TermsDocument `json:"documents"`
 }
 
 type authConfiguration struct {
@@ -234,7 +236,7 @@ func (c *Client) doForm(ctx context.Context, endpoint string, form url.Values, o
 		case "access_denied":
 			return errors.New("browser authorization was denied")
 		case "expired_token":
-			return errors.New("browser authorization expired; run oe login again")
+			return errors.New("browser authorization expired; run oe auth login again")
 		case "invalid_grant":
 			return ErrSessionExpired
 		default:
@@ -327,6 +329,29 @@ func (c *Client) ConfigureNotifications(ctx context.Context, credential Credenti
 	return response, err
 }
 
+func (c *Client) Terms(ctx context.Context, credential CredentialRequest) (Terms, error) {
+	var response Terms
+	if err := c.do(ctx, http.MethodGet, "/v1/terms", credential, nil, &response); err != nil {
+		return Terms{}, err
+	}
+	return response, validateTerms(response)
+}
+
+func (c *Client) AcceptTerms(ctx context.Context, credential CredentialRequest, request TermsAcceptanceRequest) (TermsAcceptance, error) {
+	var response TermsAcceptance
+	if err := c.do(ctx, http.MethodPost, "/v1/terms/acceptance", credential, request, &response); err != nil {
+		return TermsAcceptance{}, err
+	}
+	return response, validateTerms(response.Terms)
+}
+
+func validateTerms(terms Terms) error {
+	if terms.State != TermsAccepted && terms.State != TermsRequired {
+		return fmt.Errorf("the control API answered an unknown terms state %q", terms.State)
+	}
+	return nil
+}
+
 func (c *Client) do(ctx context.Context, method, endpoint string, credential CredentialRequest, body, output any) error {
 	encoded, err := encodeBody(body)
 	if err != nil {
@@ -391,11 +416,14 @@ func (e *sanitizedError) Error() string { return e.message }
 func (e *sanitizedError) Unwrap() error { return e.cause }
 
 // APIError is a control API refusal. Code is the stable value a caller
-// switches on; the console omits it for some refusals.
+// switches on; the console omits it for some refusals. A TERMS_REQUIRED
+// refusal also carries CanAccept and the Documents to accept.
 type APIError struct {
-	Status  int
-	Code    string
-	Message string
+	Status    int
+	Code      string
+	Message   string
+	CanAccept bool
+	Documents []TermsDocument
 }
 
 func (e *APIError) Error() string { return e.Message }
@@ -413,7 +441,10 @@ func decodeResponse(response *http.Response, output any) error {
 		if message == "" {
 			message = http.StatusText(response.StatusCode)
 		}
-		return &APIError{Status: response.StatusCode, Code: problem.Code, Message: message}
+		return &APIError{
+			Status: response.StatusCode, Code: problem.Code, Message: message,
+			CanAccept: problem.CanAccept, Documents: problem.Documents,
+		}
 	}
 	if output == nil || response.StatusCode == http.StatusNoContent {
 		_, _ = io.Copy(io.Discard, limited)

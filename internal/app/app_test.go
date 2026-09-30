@@ -24,7 +24,7 @@ const (
 	productionRelayURL = "https://relay.open-e2ee.dev/signal/v1/connection/pk_prod_public"
 )
 
-func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
+func TestAuthLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 	store := credential.NewMemory()
 	api := &fakeAPI{
 		startAuthorization: func(context.Context, control.AuthorizationRequest) (control.Authorization, error) {
@@ -33,10 +33,13 @@ func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 		pollAuthorization: func(context.Context, control.Authorization) (control.Token, error) {
 			return control.Token{AccessToken: "browser-secret"}, nil
 		},
+		terms: func(context.Context, control.CredentialRequest) (control.Terms, error) {
+			return control.Terms{State: control.TermsAccepted, CanAccept: true}, nil
+		},
 	}
 	var stdout, stderr bytes.Buffer
 	var opened string
-	exit := Run(context.Background(), []string{"--json", "login"}, Dependencies{
+	exit := Run(context.Background(), []string{"--json", "auth", "login"}, Dependencies{
 		API: api, Store: store, Out: &stdout, Err: &stderr, WorkingDir: t.TempDir(),
 		Interactive: func() bool { return true },
 		OpenURL:     func(target string) error { opened = target; return nil },
@@ -51,10 +54,11 @@ func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 	if strings.Contains(stdout.String(), "browser-secret") || strings.Contains(stderr.String(), "browser-secret") {
 		t.Fatal("login output exposed the access token")
 	}
-	if !strings.Contains(stderr.String(), "Open https://login.example/device and enter code ABCD.") {
-		t.Fatalf("JSON login hid the prompt from the person who approves it: %q", stderr.String())
+	pending, result, _ := strings.Cut(stdout.String(), "\n")
+	if event := decodeEvent(t, []byte(pending)); event.Status != "pending" || event.Action.URL != "https://login.example/device" || event.Data["userCode"] != "ABCD" {
+		t.Fatalf("JSON login hid the prompt from the person who approves it: %s", stdout.String())
 	}
-	if event := decodeEvent(t, stdout.Bytes()); event.Status != "ok" {
+	if event := decodeEvent(t, []byte(result)); event.Status != "ok" {
 		t.Fatalf("JSON login did not end in one success document: %s", stdout.String())
 	}
 	profile, err := credential.Profile(defaultControlURL)
@@ -559,7 +563,7 @@ func TestTerminalRefreshRemovesTheExpiredSession(t *testing.T) {
 		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{},
 		WorkingDir: directory, Now: func() time.Time { return now },
 	})
-	if event := decodeEvent(t, stdout.Bytes()); exit != exitAuthentication || event.Code != "SESSION_EXPIRED" || event.Next != "oe login" {
+	if event := decodeEvent(t, stdout.Bytes()); exit != exitAuthentication || event.Code != "SESSION_EXPIRED" || event.Next != "oe auth login" {
 		t.Fatalf("terminal refresh did not require login: exit=%d output=%s", exit, stdout.String())
 	}
 	if _, err := store.Get(profile); !errors.Is(err, credential.ErrNotFound) {
@@ -607,6 +611,8 @@ type fakeAPI struct {
 	getProject             func(context.Context, control.CredentialRequest, string) (control.Project, error)
 	notifications          func(context.Context, control.CredentialRequest, string, string) (control.NotificationConfiguration, error)
 	configureNotifications func(context.Context, control.CredentialRequest, string, control.NotificationConfigurationRequest) (control.NotificationConfiguration, error)
+	terms                  func(context.Context, control.CredentialRequest) (control.Terms, error)
+	acceptTerms            func(context.Context, control.CredentialRequest, control.TermsAcceptanceRequest) (control.TermsAcceptance, error)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -675,4 +681,16 @@ func (f *fakeAPI) ConfigureNotifications(ctx context.Context, credential control
 		return control.NotificationConfiguration{}, errors.New("unexpected ConfigureNotifications")
 	}
 	return f.configureNotifications(ctx, credential, project, request)
+}
+func (f *fakeAPI) Terms(ctx context.Context, credential control.CredentialRequest) (control.Terms, error) {
+	if f.terms == nil {
+		return control.Terms{}, errors.New("unexpected Terms")
+	}
+	return f.terms(ctx, credential)
+}
+func (f *fakeAPI) AcceptTerms(ctx context.Context, credential control.CredentialRequest, request control.TermsAcceptanceRequest) (control.TermsAcceptance, error) {
+	if f.acceptTerms == nil {
+		return control.TermsAcceptance{}, errors.New("unexpected AcceptTerms")
+	}
+	return f.acceptTerms(ctx, credential, request)
 }

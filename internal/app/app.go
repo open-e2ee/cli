@@ -148,7 +148,7 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 		underAgent: underAgent, harness: harness,
 	}
 	if err := r.execute(ctx, command, commandArgs); err != nil {
-		return fail(writer, command, args, err)
+		return fail(writer, envelopeCommand(command, commandArgs), args, err)
 	}
 	return 0
 }
@@ -181,10 +181,8 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 		return r.out.Success("version", Version, map[string]any{"version": Version})
 	case "init":
 		return r.init(args)
-	case "login":
-		return r.login(ctx, args)
-	case "logout":
-		return r.logout(args)
+	case "auth":
+		return r.auth(ctx, args)
 	case "sandbox":
 		return r.sandbox(ctx, args)
 	case "plan":
@@ -248,42 +246,9 @@ func (r *runner) init(args []string) error {
 	})
 }
 
-func (r *runner) login(ctx context.Context, args []string) error {
-	flags := newFlags("login")
-	timeout := flags.Duration("timeout", 5*time.Minute, "login timeout")
-	if err := parseFlags(flags, "login", args); err != nil {
-		return err
-	}
-	if r.getenv("OE_ACCESS_TOKEN") != "" {
-		return r.out.Success("login", "Using the scoped CI credential from OE_ACCESS_TOKEN. It was not stored.", map[string]any{"source": "environment"})
-	}
-	value, err := r.interactiveLogin(ctx, *timeout)
-	if err != nil {
-		return err
-	}
-	return r.out.Success("login", "Login complete. The credential is in the OS keychain.", map[string]any{"source": value.Source})
-}
-
-func (r *runner) logout(args []string) error {
-	if err := parseFlags(newFlags("logout"), "logout", args); err != nil {
-		return err
-	}
-	profile, err := credential.Profile(r.controlURL)
-	if err != nil {
-		return err
-	}
-	if err := r.store.Delete(profile); err != nil {
-		return err
-	}
-	message := "Logged out. The OS keychain holds no session for " + profile + "."
-	environment := r.getenv("OE_ACCESS_TOKEN") != ""
-	if environment {
-		message += " OE_ACCESS_TOKEN is still set, so later commands still use it."
-	}
-	return r.out.Success("logout", message, map[string]any{"profile": profile, "environmentCredential": environment})
-}
-
-func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (credential.Credential, error) {
+// interactiveLogin runs the device flow and stores the session. announce shows
+// the person the verification URL and the code before the CLI polls.
+func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration, announce func(control.Authorization)) (credential.Credential, error) {
 	profile, err := credential.Profile(r.controlURL)
 	if err != nil {
 		return credential.Credential{}, err
@@ -295,15 +260,7 @@ func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (c
 	if authorization.DeviceCode == "" || authorization.VerificationURL == "" || authorization.UserCode == "" {
 		return credential.Credential{}, errors.New("control API returned an incomplete browser authorization")
 	}
-	prompt := fmt.Sprintf("Open %s and enter code %s.", authorization.VerificationURL, authorization.UserCode)
-	_ = r.out.Progress("login", prompt, map[string]any{
-		"verificationUrl": authorization.VerificationURL, "userCode": authorization.UserCode,
-	})
-	if r.mode == output.JSON {
-		// JSON mode keeps stdout for the one final document, so the person who
-		// approves the login reads the prompt on stderr.
-		fmt.Fprintln(r.errOut, prompt)
-	}
+	announce(authorization)
 	// The prompt is already visible, so a browser that cannot open is not a
 	// failure. An agent or a script hands the visible URL to a person.
 	if r.canPrompt() {
@@ -345,6 +302,23 @@ func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (c
 			return credential.Credential{}, fmt.Errorf("login did not complete: %w", err)
 		}
 	}
+}
+
+// announceProgress shows the device flow of an automatic login as progress,
+// so JSON mode keeps stdout for the one final document of the command.
+func (r *runner) announceProgress(authorization control.Authorization) {
+	prompt := loginPrompt(authorization)
+	_ = r.out.Progress("auth login", prompt, map[string]any{
+		"verificationUrl": authorization.VerificationURL, "userCode": authorization.UserCode,
+	})
+	if r.mode == output.JSON {
+		// The person who approves the login reads the prompt on stderr.
+		fmt.Fprintln(r.errOut, prompt)
+	}
+}
+
+func loginPrompt(authorization control.Authorization) string {
+	return fmt.Sprintf("Open %s and enter code %s.", authorization.VerificationURL, authorization.UserCode)
 }
 
 func (r *runner) sandbox(ctx context.Context, args []string) error {
@@ -1079,6 +1053,8 @@ func controlPolicy(value config.Config, environment string) (control.RelayPolicy
 	}, nil
 }
 
+// access resolves and refreshes the session, and checks its local scope. An
+// empty scope checks none; the control API checks the token either way.
 func (r *runner) access(ctx context.Context, scope string, loginWhenMissing bool) (credential.Credential, error) {
 	profile, err := credential.Profile(r.controlURL)
 	if err != nil {
@@ -1086,10 +1062,10 @@ func (r *runner) access(ctx context.Context, scope string, loginWhenMissing bool
 	}
 	value, err := credential.Resolve(r.store, profile)
 	if errors.Is(err, credential.ErrNotFound) && loginWhenMissing {
-		value, err = r.interactiveLogin(ctx, 5*time.Minute)
+		value, err = r.interactiveLogin(ctx, 5*time.Minute, r.announceProgress)
 	}
 	if errors.Is(err, credential.ErrNotFound) {
-		return credential.Credential{}, loginRequired("AUTHENTICATION_REQUIRED", "no session is stored for "+profile+"; run oe login, or set OE_ACCESS_TOKEN", err)
+		return credential.Credential{}, loginRequired("AUTHENTICATION_REQUIRED", "no session is stored for "+profile+"; run oe auth login, or set OE_ACCESS_TOKEN", err)
 	}
 	if err != nil {
 		return credential.Credential{}, err
@@ -1099,7 +1075,7 @@ func (r *runner) access(ctx context.Context, scope string, loginWhenMissing bool
 		if refreshErr != nil {
 			if errors.Is(refreshErr, control.ErrSessionExpired) {
 				_ = r.store.Delete(profile)
-				return credential.Credential{}, loginRequired("SESSION_EXPIRED", "the WorkOS session expired; run oe login again", refreshErr)
+				return credential.Credential{}, loginRequired("SESSION_EXPIRED", "the WorkOS session expired; run oe auth login again", refreshErr)
 			}
 			if !credentialIsCurrentlyValid(value, r.now()) {
 				return credential.Credential{}, fmt.Errorf("refresh the WorkOS session: %w", refreshErr)
@@ -1113,6 +1089,9 @@ func (r *runner) access(ctx context.Context, scope string, loginWhenMissing bool
 				return credential.Credential{}, err
 			}
 		}
+	}
+	if scope == "" {
+		return value, nil
 	}
 	if err := credential.RequireScope(value, scope); err != nil {
 		return credential.Credential{}, &problem{code: "SCOPE_REQUIRED", message: err.Error(), exit: exitFailure, cause: err}

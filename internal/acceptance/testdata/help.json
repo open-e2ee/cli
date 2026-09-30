@@ -10,14 +10,13 @@
         "usage": ["oe init [--directory PATH] [--name PROJECT] [--force]"]
       },
       {
-        "name": "login",
-        "summary": "Authorize this machine in a browser and store the session in the OS keychain.",
-        "usage": ["oe login [--timeout DURATION]"]
-      },
-      {
-        "name": "logout",
-        "summary": "Remove the stored session for the control API.",
-        "usage": ["oe logout"]
+        "name": "auth",
+        "summary": "Log in with a browser and store the session in the OS keychain, then accept the OpenE2EE terms for the organization. Show or remove the session.",
+        "usage": [
+          "oe auth login [--accept-terms] [--timeout DURATION]",
+          "oe auth status",
+          "oe auth logout"
+        ]
       },
       {
         "name": "sandbox",
@@ -99,7 +98,7 @@
       },
       {
         "code": 4,
-        "meaning": "Authentication is required. Run oe login."
+        "meaning": "Authentication is required. Run oe auth login."
       },
       {
         "code": 5,
@@ -113,7 +112,7 @@
     "globalFlags": [
       {
         "name": "--json",
-        "summary": "Write exactly one JSON document to stdout, for success and for failure."
+        "summary": "Write one JSON document to stdout for the result, for success and for failure. oe auth login writes one pending event before it, while a person approves the device."
       },
       {
         "name": "--json-stream",
