@@ -49,8 +49,9 @@ func loginRequired(code, message string, cause error) error {
 // classify gives every error that reaches Run a code and an exit status. A
 // control API refusal keeps the code that the console sent. A temporary failure
 // exits 6, and its next is the command line of the run. A terms refusal exits
-// 5: a person must accept, or an administrator must.
-func classify(err error, commandLine string) *problem {
+// 5: a person must accept, or an administrator must. environment is the
+// environment of the run.
+func classify(err error, commandLine, environment string) *problem {
 	if known, ok := errors.AsType[*problem](err); ok {
 		return known
 	}
@@ -84,6 +85,9 @@ func classify(err error, commandLine string) *problem {
 			}
 		case refusal.Code == "TERMS_PERMISSION_REQUIRED":
 			result.exit = exitPersonAction
+		case refusal.Code == "ENVIRONMENT_NOT_FOUND" && environment == "sandbox":
+			// Every project has Sandbox, so the session cannot read this project.
+			result.next = "oe auth status"
 		case refusal.Code == "AUTHORITY_UNAVAILABLE", refusal.Status == http.StatusTooManyRequests,
 			refusal.Status == http.StatusBadGateway, refusal.Status == http.StatusServiceUnavailable,
 			refusal.Status == http.StatusGatewayTimeout:

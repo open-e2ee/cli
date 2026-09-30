@@ -102,7 +102,7 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--environment", "sandbox", "--json", "sandbox", "--timeout", "1s"}, Dependencies{
+	exit := Run(context.Background(), []string{"--env", "sandbox", "--json", "sandbox", "--timeout", "1s"}, Dependencies{
 		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
 		Sleep: func(context.Context, time.Duration) error { return nil },
 	})
@@ -176,7 +176,7 @@ func TestDeployAndConnectionNameTheExpoVariable(t *testing.T) {
 	if err != nil || !strings.Contains(string(environment), "\nEXPO_PUBLIC_OPEN_E2EE_RELAY_URL="+productionRelayURL+"\n") {
 		t.Fatalf("production environment has no Expo variable: %q %v", environment, err)
 	}
-	exit, stdout, _ = run(t, dependencies, "--json", "project", "connection", "--environment", "production")
+	exit, stdout, _ = run(t, dependencies, "--json", "project", "connection", "--env", "production")
 	if connection := decodeEvent(t, []byte(stdout)); exit != 0 || connection.Data["variable"] != "EXPO_PUBLIC_OPEN_E2EE_RELAY_URL" {
 		t.Fatalf("connection did not name the Expo variable: %s", stdout)
 	}
@@ -262,7 +262,7 @@ func TestDoctorReportsSafeConnectionOriginAndRefusesProjectDrift(t *testing.T) {
 		return &http.Response{Body: io.NopCloser(strings.NewReader(`{"schemaVersion":1}`)), Header: make(http.Header), StatusCode: http.StatusOK}, nil
 	})}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--environment", "sandbox", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	exit := Run(context.Background(), []string{"--env", "sandbox", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
 	if exit != 0 || !strings.Contains(stdout.String(), `"relayOrigin":"https://sandbox.relay.open-e2ee.dev"`) || strings.Contains(stdout.String(), "pk_sandbox_public") {
 		t.Fatalf("doctor did not report only the safe origin: %s", stdout.String())
 	}
@@ -270,7 +270,7 @@ func TestDoctorReportsSafeConnectionOriginAndRefusesProjectDrift(t *testing.T) {
 		return control.Project{Slug: "doctor-chat", Sandbox: projectEnvironment("https://sandbox.relay.open-e2ee.dev/signal/v1/connection/another-project", "1")}, nil
 	}
 	stdout.Reset()
-	exit = Run(context.Background(), []string{"--environment", "sandbox", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	exit = Run(context.Background(), []string{"--env", "sandbox", "--json", "doctor"}, Dependencies{API: api, HTTP: httpClient, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
 	if exit == 0 || !strings.Contains(stdout.String(), "stale or belongs to another project") || strings.Contains(stdout.String(), "pk_sandbox_public") {
 		t.Fatalf("doctor did not refuse project drift safely: %s", stdout.String())
 	}
@@ -533,7 +533,7 @@ func TestJSONOutputIsOneDocumentAfterAutomaticLogin(t *testing.T) {
 		},
 	}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--environment", "sandbox", "--json", "sandbox", "--no-wait"}, Dependencies{
+	exit := Run(context.Background(), []string{"--env", "sandbox", "--json", "sandbox", "--no-wait"}, Dependencies{
 		API: api, Store: credential.NewMemory(), Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
 		OpenURL: func(string) error { return nil }, Sleep: func(context.Context, time.Duration) error { return nil },
 	})

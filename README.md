@@ -37,7 +37,7 @@ oe auth logout          remove the stored session
 oe sandbox              create the Sandbox environment, install its Relay connection, and wait for acknowledgement
 oe plan                 show the production configuration change without applying it
 oe deploy               complete the production card gate, deploy, and install its Relay connection
-oe doctor               check project, environment, connection, credentials, and control-plane health
+oe doctor               check project, environment, connection, credentials, and control-plane health; --wait waits for the first acknowledged Sandbox message
 oe project show         read a project and the state of each environment
 oe project connection   print the Relay connection URL of one environment
 oe project select       select another project
@@ -52,8 +52,10 @@ data. `oe COMMAND --help` shows one command.
 Global flags can come before or after the command. Global `--json` emits one
 final JSON document, and `oe auth login` emits one pending event before it. `--json-stream` emits newline-delimited progress and final
 events. `--agent yes|no|auto` says whether a coding agent runs `oe`.
-`--environment` is an advanced override. Normal work uses sandbox for
-`oe sandbox`. It uses production for `oe plan` and `oe deploy`.
+`--env sandbox|production` (`-e`) selects the environment. Without it,
+`oe doctor`, `oe project`, and `oe notifications` read `OE_ENV`, then use
+sandbox. `oe sandbox` always uses sandbox, and `oe plan` and `oe deploy` use
+production, whatever `OE_ENV` holds.
 
 ## Use from a coding agent
 
@@ -124,8 +126,8 @@ Read the Relay connection URL of a project. Text mode prints only the URL, so a
 shell can capture it:
 
 ```bash
-oe project connection --environment sandbox
-oe project connection my-chat --environment production --json
+oe project connection
+oe project connection my-chat --env production --json
 ```
 
 In JSON, `data.variable` names the variable that the application reads (see

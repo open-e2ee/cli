@@ -26,7 +26,7 @@
       {
         "name": "plan",
         "summary": "Show the Relay policy changes that a deploy applies, without a change.",
-        "usage": ["oe plan [--environment sandbox|production]"]
+        "usage": ["oe plan [--env sandbox|production]"]
       },
       {
         "name": "deploy",
@@ -35,15 +35,17 @@
       },
       {
         "name": "doctor",
-        "summary": "Check the config, session, project, and Relay connection of the selected environment.",
-        "usage": ["oe doctor [--environment sandbox|production]"]
+        "summary": "Check the config, session, project, and Relay connection of the selected environment. With --wait, then wait for the first acknowledged Sandbox message.",
+        "usage": [
+          "oe doctor [--env sandbox|production] [--wait] [--timeout DURATION]"
+        ]
       },
       {
         "name": "project",
         "summary": "Read the Relay project, print a Relay connection URL, or select another project.",
         "usage": [
-          "oe project show [PROJECT]",
-          "oe project connection [PROJECT] [--environment sandbox|production]",
+          "oe project show [PROJECT] [--env sandbox|production]",
+          "oe project connection [PROJECT] [--env sandbox|production]",
           "oe project select PROJECT"
         ]
       },
@@ -51,10 +53,10 @@
         "name": "notifications",
         "summary": "Stage and verify best-effort iOS notification profiles.",
         "usage": [
-          "oe notifications status",
-          "oe notifications setup ios [--profile background-only|visible-alert]",
-          "oe notifications add-nse",
-          "oe notifications verify ios [--app-bundle PATH]",
+          "oe notifications status [--env sandbox|production]",
+          "oe notifications setup ios [--profile background-only|visible-alert] [--env sandbox|production]",
+          "oe notifications add-nse [--env sandbox|production]",
+          "oe notifications verify ios [--app-bundle PATH] [--env sandbox|production]",
           "oe notifications apple-filtering-request"
         ]
       },
@@ -77,6 +79,10 @@
       {
         "name": "OE_ACCESS_TOKEN_SCOPES",
         "summary": "The scopes of OE_ACCESS_TOKEN, separated by commas or spaces."
+      },
+      {
+        "name": "OE_ENV",
+        "summary": "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, and sandbox ignore it."
       },
       {
         "name": "OE_OPERATION_ID",
@@ -123,8 +129,8 @@
         "summary": "Say whether a coding agent runs oe. The default, auto, reads the environment variables that coding agents set. Under an agent, the default output is JSON, and oe never prompts and never opens a browser. --agent no restores text output."
       },
       {
-        "name": "--environment sandbox|production",
-        "summary": "Select the environment. The default is the command's own environment, then sandbox."
+        "name": "--env sandbox|production",
+        "summary": "Select the environment. -e is the short form. Without it, doctor, project, and notifications read OE_ENV, then use sandbox. plan and deploy use production."
       },
       {
         "name": "--control-url URL",

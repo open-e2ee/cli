@@ -51,24 +51,24 @@ var commandSurface = []commandSpec{
 		"oe sandbox [--timeout DURATION] [--no-wait]",
 	}},
 	{"plan", "Show the Relay policy changes that a deploy applies, without a change.", []string{
-		"oe plan [--environment sandbox|production]",
+		"oe plan [--env sandbox|production]",
 	}},
 	{"deploy", "Deploy Relay policy to Production and write its Relay connection to .env.production.local.", []string{
 		"oe deploy [--confirm]",
 	}},
-	{"doctor", "Check the config, session, project, and Relay connection of the selected environment.", []string{
-		"oe doctor [--environment sandbox|production]",
+	{"doctor", "Check the config, session, project, and Relay connection of the selected environment. With --wait, then wait for the first acknowledged Sandbox message.", []string{
+		"oe doctor [--env sandbox|production] [--wait] [--timeout DURATION]",
 	}},
 	{"project", "Read the Relay project, print a Relay connection URL, or select another project.", []string{
-		"oe project show [PROJECT]",
-		"oe project connection [PROJECT] [--environment sandbox|production]",
+		"oe project show [PROJECT] [--env sandbox|production]",
+		"oe project connection [PROJECT] [--env sandbox|production]",
 		"oe project select PROJECT",
 	}},
 	{"notifications", "Stage and verify best-effort iOS notification profiles.", []string{
-		"oe notifications status",
-		"oe notifications setup ios [--profile background-only|visible-alert]",
-		"oe notifications add-nse",
-		"oe notifications verify ios [--app-bundle PATH]",
+		"oe notifications status [--env sandbox|production]",
+		"oe notifications setup ios [--profile background-only|visible-alert] [--env sandbox|production]",
+		"oe notifications add-nse [--env sandbox|production]",
+		"oe notifications verify ios [--app-bundle PATH] [--env sandbox|production]",
 		"oe notifications apple-filtering-request",
 	}},
 	{"version", "Print the CLI version.", []string{
@@ -83,7 +83,7 @@ var globalFlagSurface = []globalFlagSpec{
 	{"--json", "Write one JSON document to stdout for the result, for success and for failure. oe auth login writes one pending event before it, while a person approves the device."},
 	{"--json-stream", "Write newline-delimited JSON progress events, then one final event, to stdout."},
 	{"--agent yes|no|auto", "Say whether a coding agent runs oe. The default, auto, reads the environment variables that coding agents set. Under an agent, the default output is JSON, and oe never prompts and never opens a browser. --agent no restores text output."},
-	{"--environment sandbox|production", "Select the environment. The default is the command's own environment, then sandbox."},
+	{"--env sandbox|production", "Select the environment. -e is the short form. Without it, doctor, project, and notifications read OE_ENV, then use sandbox. plan and deploy use production."},
 	{"--control-url URL", "Use another control API. It must use HTTPS except on loopback."},
 	{"-h, --help", "Show help."},
 }
@@ -100,6 +100,7 @@ var exitCodeSurface = []exitCodeSpec{
 var variableSurface = []variableSpec{
 	{"OE_ACCESS_TOKEN", "A scoped CI credential. The CLI keeps it in memory and never stores it."},
 	{"OE_ACCESS_TOKEN_SCOPES", "The scopes of OE_ACCESS_TOKEN, separated by commas or spaces."},
+	{"OE_ENV", "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, and sandbox ignore it."},
 	{"OE_OPERATION_ID", "The idempotency key for each remote mutation of one run. Set it only to retry one mutation."},
 }
 

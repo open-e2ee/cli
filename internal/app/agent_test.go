@@ -18,13 +18,14 @@ import (
 	"github.com/open-e2ee/oe/internal/projectlock"
 )
 
-// TestMain removes the variables that coding agents set, so a test that runs
-// under an agent sees the same defaults as CI. A test that needs a variable
-// passes Getenv.
+// TestMain removes the variables that coding agents set, and OE_ENV, so a
+// test that runs under an agent or in a configured shell sees the same
+// defaults as CI. A test that needs a variable passes Getenv.
 func TestMain(m *testing.M) {
 	for _, name := range agent.Variables() {
 		os.Unsetenv(name)
 	}
+	os.Unsetenv("OE_ENV")
 	m.Run()
 }
 
@@ -81,11 +82,11 @@ func TestUsageErrorsExitTwoInTheRequestedMode(t *testing.T) {
 		"unknown global flag":       {"--bogus", "--json"},
 		"unknown command flag":      {"deploy", "--bogus", "--json"},
 		"unexpected argument":       {"--json", "doctor", "extra"},
-		"missing global flag value": {"--json", "doctor", "--environment"},
-		"invalid environment":       {"--json", "--environment=stage", "doctor"},
+		"missing global flag value": {"--json", "doctor", "--env"},
+		"invalid environment":       {"--json", "--env=stage", "doctor"},
 		"missing subcommand":        {"--json", "project"},
 		"unknown help topic":        {"--json", "help", "bogus"},
-		"sandbox with production":   {"--json", "--environment", "production", "sandbox"},
+		"sandbox with production":   {"--json", "--env", "production", "sandbox"},
 		"invalid agent mode":        {"--json", "--agent=maybe", "doctor"},
 		"missing agent mode":        {"doctor", "--json", "--agent"},
 	} {
@@ -143,7 +144,7 @@ func TestHelpDescribesEachCommand(t *testing.T) {
 		exit, stdout, _ := run(t, Dependencies{}, args...)
 		spec := decodeEvent(t, []byte(stdout))
 		usage, _ := spec.Data["usage"].([]any)
-		if exit != 0 || spec.Command != "project" || !slices.Contains(usage, any("oe project connection [PROJECT] [--environment sandbox|production]")) {
+		if exit != 0 || spec.Command != "project" || !slices.Contains(usage, any("oe project connection [PROJECT] [--env sandbox|production]")) {
 			t.Fatalf("%v did not describe project: %s", args, stdout)
 		}
 	}
@@ -202,12 +203,12 @@ func TestProjectConnectionPrintsTheServerRelayURL(t *testing.T) {
 	if exit != 0 || stdout != sandboxRelayURL+"\n" {
 		t.Fatalf("text connection is not the bare URL: exit=%d %q", exit, stdout)
 	}
-	exit, stdout, _ = run(t, dependencies, "project", "connection", "other-chat", "--json", "--environment=sandbox")
+	exit, stdout, _ = run(t, dependencies, "project", "connection", "other-chat", "--json", "--env=sandbox")
 	connection := decodeEvent(t, []byte(stdout))
 	if exit != 0 || connection.Data["relayUrl"] != sandboxRelayURL || connection.Data["project"] != "other-chat" || connection.Data["variable"] != "OPEN_E2EE_RELAY_URL" {
 		t.Fatalf("JSON connection is incomplete: %s", stdout)
 	}
-	exit, stdout, _ = run(t, dependencies, "--json", "project", "connection", "--environment", "production")
+	exit, stdout, _ = run(t, dependencies, "--json", "project", "connection", "--env", "production")
 	inactive := decodeEvent(t, []byte(stdout))
 	if exit != exitFailure || inactive.Code != "ENVIRONMENT_NOT_ACTIVE" || inactive.Next != "oe deploy" {
 		t.Fatalf("inactive Production did not name oe deploy: %s", stdout)
