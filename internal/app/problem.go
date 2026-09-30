@@ -20,10 +20,10 @@ type problem struct {
 	next    string
 	exit    int
 	data    map[string]any
-	// actionURL is a page that a person must open. The envelope carries it as
-	// action.url.
+	cause   error
+
+	// actionURL is a page that a person must open to move forward.
 	actionURL string
-	cause     error
 }
 
 func (p *problem) Error() string { return p.message }
@@ -92,9 +92,8 @@ func commandLine(args []string) string {
 const shellSafe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./_-"
 
 func (p *problem) output() output.Problem {
-	result := output.Problem{Message: p.message, Code: p.code, Next: p.next, Data: p.data}
-	if p.actionURL != "" {
-		result.Action = &output.Action{URL: p.actionURL}
+	return output.Problem{
+		Message: p.message, Code: p.code, Next: p.next,
+		Action: output.Action{URL: p.actionURL}, Data: p.data,
 	}
-	return result
 }

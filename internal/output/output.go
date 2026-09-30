@@ -22,22 +22,20 @@ type Event struct {
 	Error   string         `json:"error,omitempty"`
 	Code    string         `json:"code,omitempty"`
 	Next    string         `json:"next,omitempty"`
-	Action  *Action        `json:"action,omitempty"`
+	Action  Action         `json:"action,omitzero"`
 }
 
 // Problem is a failed command. Code is stable for a caller to switch on, and
-// Next names the command that moves the caller forward. Action is a step that
-// only a person can take.
+// Next names the command that moves the caller forward.
 type Problem struct {
 	Message string
 	Code    string
 	Next    string
+	Action  Action
 	Data    map[string]any
-	Action  *Action
 }
 
-// Action is a step for a person. URL is the page that the person opens. A
-// caller that reads the envelope gives the URL to the person.
+// Action is a step that a person must take outside the CLI.
 type Action struct {
 	URL string `json:"url"`
 }
@@ -81,7 +79,7 @@ func (w *Writer) Failure(command string, problem Problem) error {
 		if _, err := fmt.Fprintf(w.errOut, "error: %s\n", problem.Message); err != nil {
 			return err
 		}
-		if problem.Action != nil {
+		if problem.Action.URL != "" {
 			if _, err := fmt.Fprintf(w.errOut, "action: open %s\n", problem.Action.URL); err != nil {
 				return err
 			}
