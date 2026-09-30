@@ -14,6 +14,8 @@ type API interface {
 	GetProject(context.Context, CredentialRequest, string) (Project, error)
 	Notifications(context.Context, CredentialRequest, string, string) (NotificationConfiguration, error)
 	ConfigureNotifications(context.Context, CredentialRequest, string, NotificationConfigurationRequest) (NotificationConfiguration, error)
+	Terms(context.Context, CredentialRequest) (Terms, error)
+	AcceptTerms(context.Context, CredentialRequest, TermsAcceptanceRequest) (TermsAcceptance, error)
 }
 
 type CredentialRequest struct {
@@ -137,4 +139,39 @@ type NotificationConfigurationRequest struct {
 	AllowedProfiles              []NotificationProfile `json:"allowedProfiles"`
 	Environment                  string                `json:"environment"`
 	ExpectedConfigurationVersion int                   `json:"expectedConfigurationVersion"`
+}
+
+const (
+	TermsAccepted = "accepted"
+	TermsRequired = "required"
+)
+
+// Terms is the terms standing of the caller's organization. One acceptance
+// covers every document, and CanAccept reports whether the caller may give it.
+type Terms struct {
+	State      string          `json:"state"`
+	CanAccept  bool            `json:"canAccept"`
+	Documents  []TermsDocument `json:"documents"`
+	AcceptedAt *string         `json:"acceptedAt"`
+}
+
+type TermsDocument struct {
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Version string `json:"version"`
+}
+
+// TermsAcceptanceRequest is the act of acceptance only. The server records the
+// document versions and the time. AgentName is the detected coding agent, and
+// only an agent actor has one.
+type TermsAcceptanceRequest struct {
+	Actor     string `json:"actor"`
+	AgentName string `json:"agentName,omitempty"`
+}
+
+// TermsAcceptance is the standing after an acceptance. Changed is false when
+// the organization had accepted already, so nothing was recorded.
+type TermsAcceptance struct {
+	Terms
+	Changed bool `json:"changed"`
 }

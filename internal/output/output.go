@@ -35,9 +35,12 @@ type Problem struct {
 	Data    map[string]any
 }
 
-// Action is a step that a person must take outside the CLI.
+// Action is a step that a person must take outside the CLI. Kind is the
+// place of the step, such as browser, and Reason is why, such as login.
 type Action struct {
-	URL string `json:"url"`
+	Kind   string `json:"kind,omitempty"`
+	URL    string `json:"url"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type Writer struct {
@@ -66,12 +69,35 @@ func (w *Writer) Progress(command, message string, data map[string]any) error {
 	return w.writeJSON(Event{Status: "progress", Command: command, Message: message, Data: data})
 }
 
-func (w *Writer) Success(command, message string, data map[string]any) error {
+// Pending writes a step that waits for a person, before the final result.
+// Both JSON modes write it to out, so a caller can hand the action to the
+// person while the command waits.
+func (w *Writer) Pending(command, message string, action Action, data map[string]any) error {
 	if w.mode == Text {
 		_, err := fmt.Fprintln(w.out, message)
 		return err
 	}
-	return w.writeJSON(Event{Status: "ok", Command: command, Message: message, Data: data})
+	return w.writeJSON(Event{Status: "pending", Command: command, Message: message, Data: data, Action: action})
+}
+
+func (w *Writer) Success(command, message string, data map[string]any) error {
+	return w.SuccessNext(command, message, "", data)
+}
+
+// SuccessNext writes a success whose next names the command that moves the
+// caller forward.
+func (w *Writer) SuccessNext(command, message, next string, data map[string]any) error {
+	if w.mode == Text {
+		if _, err := fmt.Fprintln(w.out, message); err != nil {
+			return err
+		}
+		if next != "" {
+			_, err := fmt.Fprintf(w.out, "next: %s\n", next)
+			return err
+		}
+		return nil
+	}
+	return w.writeJSON(Event{Status: "ok", Command: command, Message: message, Data: data, Next: next})
 }
 
 func (w *Writer) Failure(command string, problem Problem) error {

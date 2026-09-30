@@ -36,7 +36,9 @@ type event struct {
 	Code    string `json:"code"`
 	Next    string `json:"next"`
 	Action  struct {
-		URL string `json:"url"`
+		Kind   string `json:"kind"`
+		URL    string `json:"url"`
+		Reason string `json:"reason"`
 	} `json:"action"`
 	Data map[string]any `json:"data"`
 }
@@ -150,7 +152,7 @@ func TestHelpDescribesEachCommand(t *testing.T) {
 func TestMissingSessionExitsFourAndNamesLogin(t *testing.T) {
 	exit, stdout, _ := run(t, Dependencies{}, "--json", "project", "show", "any-chat")
 	failure := decodeEvent(t, []byte(stdout))
-	if exit != exitAuthentication || failure.Code != "AUTHENTICATION_REQUIRED" || failure.Next != "oe login" {
+	if exit != exitAuthentication || failure.Code != "AUTHENTICATION_REQUIRED" || failure.Next != "oe auth login" {
 		t.Fatalf("missing session was not an authentication failure: exit=%d %s", exit, stdout)
 	}
 }
@@ -163,8 +165,11 @@ func TestControlRefusalKeepsTheConsoleCode(t *testing.T) {
 		exit    int
 		next    string
 	}{
-		{&control.APIError{Status: 401, Code: "INVALID_SESSION", Message: "Run oe login again."}, exitAuthentication, "oe login"},
+		{&control.APIError{Status: 401, Code: "INVALID_SESSION", Message: "Run oe auth login again."}, exitAuthentication, "oe auth login"},
 		{&control.APIError{Status: 404, Code: "PROJECT_NOT_FOUND", Message: "Relay project not found."}, exitFailure, ""},
+		{&control.APIError{Status: 409, Code: "TERMS_REQUIRED", Message: "Accept the OpenE2EE terms first.", CanAccept: true}, exitPersonAction, "oe auth login --accept-terms"},
+		{&control.APIError{Status: 409, Code: "TERMS_REQUIRED", Message: "An administrator must accept the OpenE2EE terms."}, exitPersonAction, ""},
+		{&control.APIError{Status: 403, Code: "TERMS_PERMISSION_REQUIRED", Message: "An administrator of your Organization must accept them."}, exitPersonAction, ""},
 		{&control.APIError{Status: 500, Message: "Internal Server Error"}, exitFailure, ""},
 	} {
 		api := &fakeAPI{getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
@@ -248,7 +253,8 @@ func productionPlan(project, setupURL string) *fakeAPI {
 	}
 }
 
-// deviceLogin answers a browser authorization that a person approves at once.
+// deviceLogin answers a browser authorization that a person approves at once,
+// for an organization that has accepted the terms.
 func deviceLogin() *fakeAPI {
 	return &fakeAPI{
 		startAuthorization: func(context.Context, control.AuthorizationRequest) (control.Authorization, error) {
@@ -256,6 +262,9 @@ func deviceLogin() *fakeAPI {
 		},
 		pollAuthorization: func(context.Context, control.Authorization) (control.Token, error) {
 			return control.Token{AccessToken: "token"}, nil
+		},
+		terms: func(context.Context, control.CredentialRequest) (control.Terms, error) {
+			return control.Terms{State: control.TermsAccepted, CanAccept: true}, nil
 		},
 	}
 }
@@ -293,9 +302,9 @@ func TestAgentFlagOverridesDetection(t *testing.T) {
 		getenv func(string) string
 		opened int
 	}{
-		{[]string{"--agent", "no", "login"}, claudeCode, 1},
-		{[]string{"--agent", "yes", "login"}, environment(nil), 0},
-		{[]string{"--agent", "auto", "login"}, claudeCode, 0},
+		{[]string{"--agent", "no", "auth", "login"}, claudeCode, 1},
+		{[]string{"--agent", "yes", "auth", "login"}, environment(nil), 0},
+		{[]string{"--agent", "auto", "auth", "login"}, claudeCode, 0},
 	} {
 		browser := &opener{}
 		exit, stdout, _ := run(t, Dependencies{
@@ -310,11 +319,12 @@ func TestAgentFlagOverridesDetection(t *testing.T) {
 func TestAgentNeverOpensABrowser(t *testing.T) {
 	codex := environment(map[string]string{"CODEX_THREAD_ID": "codex-thread"})
 	browser := &opener{}
-	exit, stdout, stderr := run(t, Dependencies{
+	exit, stdout, _ := run(t, Dependencies{
 		API: deviceLogin(), Getenv: codex, Interactive: terminal, OpenURL: browser.open,
-	}, "login")
-	if exit != 0 || !strings.Contains(stderr, "Open https://login.example/device and enter code ABCD.") {
-		t.Fatalf("an agent login hid the URL from the person who approves it: exit=%d stdout=%s stderr=%q", exit, stdout, stderr)
+	}, "auth", "login")
+	pending, _, _ := strings.Cut(stdout, "\n")
+	if first := decodeEvent(t, []byte(pending)); exit != 0 || first.Status != "pending" || first.Action.URL != "https://login.example/device" || first.Data["userCode"] != "ABCD" {
+		t.Fatalf("an agent login hid the URL from the person who approves it: exit=%d stdout=%s", exit, stdout)
 	}
 
 	directory := initializedProject(t, "agent-chat")
@@ -356,7 +366,7 @@ func TestNoTTYAndNoAgentNeverPrompts(t *testing.T) {
 	}
 
 	script.API = deviceLogin()
-	exit, stdout, _ = run(t, script, "login")
+	exit, stdout, _ = run(t, script, "auth", "login")
 	if exit != 0 || !strings.Contains(stdout, "https://login.example/device") {
 		t.Fatalf("a script login hid the URL: exit=%d %q", exit, stdout)
 	}
@@ -381,7 +391,7 @@ func TestAgentAtATerminalNeverPrompts(t *testing.T) {
 func TestLogoutRemovesTheStoredSession(t *testing.T) {
 	store := credential.NewMemory()
 	storeCredential(t, store, "project:read")
-	exit, stdout, _ := run(t, Dependencies{Store: store, Getenv: func(string) string { return "" }}, "--json", "logout")
+	exit, stdout, _ := run(t, Dependencies{Store: store, Getenv: func(string) string { return "" }}, "--json", "auth", "logout")
 	if exit != 0 || decodeEvent(t, []byte(stdout)).Data["environmentCredential"] != false {
 		t.Fatalf("logout failed: %s", stdout)
 	}
@@ -392,7 +402,7 @@ func TestLogoutRemovesTheStoredSession(t *testing.T) {
 	if _, err := store.Get(profile); !errors.Is(err, credential.ErrNotFound) {
 		t.Fatalf("logout left the session stored: %v", err)
 	}
-	if exit, _, _ := run(t, Dependencies{Store: store}, "logout"); exit != 0 {
+	if exit, _, _ := run(t, Dependencies{Store: store}, "auth", "logout"); exit != 0 {
 		t.Fatal("a second logout failed")
 	}
 }
@@ -430,9 +440,9 @@ func TestAgentDefaultsToJSON(t *testing.T) {
 	if failure := decodeEvent(t, []byte(stdout)); exit != exitFailure || stderr != "" || failure.Code != "CONFIG_NOT_FOUND" {
 		t.Fatalf("an agent did not get the failure as JSON on stdout: exit=%d stdout=%q stderr=%q", exit, stdout, stderr)
 	}
-	exit, stdout, _ = run(t, Dependencies{API: deviceLogin(), Getenv: claudeCode}, "--json-stream", "login")
+	exit, stdout, _ = run(t, Dependencies{API: deviceLogin(), Getenv: claudeCode}, "--json-stream", "auth", "login")
 	first, _, _ := strings.Cut(stdout, "\n")
-	if exit != 0 || decodeEvent(t, []byte(first)).Status != "progress" {
-		t.Fatalf("--json-stream under an agent wrote no progress event: exit=%d %q", exit, stdout)
+	if exit != 0 || decodeEvent(t, []byte(first)).Status != "pending" {
+		t.Fatalf("--json-stream under an agent wrote no pending event: exit=%d %q", exit, stdout)
 	}
 }

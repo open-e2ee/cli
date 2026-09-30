@@ -42,11 +42,10 @@ var commandSurface = []commandSpec{
 	{"init", "Write open-e2ee.jsonc and an in-memory example script. Needs no login.", []string{
 		"oe init [--directory PATH] [--name PROJECT] [--force]",
 	}},
-	{"login", "Authorize this machine in a browser and store the session in the OS keychain.", []string{
-		"oe login [--timeout DURATION]",
-	}},
-	{"logout", "Remove the stored session for the control API.", []string{
-		"oe logout",
+	{"auth", "Log in with a browser and store the session in the OS keychain, then accept the OpenE2EE terms for the organization. Show or remove the session.", []string{
+		"oe auth login [--accept-terms] [--timeout DURATION]",
+		"oe auth status",
+		"oe auth logout",
 	}},
 	{"sandbox", "Create or update the Sandbox environment, write its Relay connection to .env.local, and wait for the first acknowledged message.", []string{
 		"oe sandbox [--timeout DURATION] [--no-wait]",
@@ -81,7 +80,7 @@ var commandSurface = []commandSpec{
 }
 
 var globalFlagSurface = []globalFlagSpec{
-	{"--json", "Write exactly one JSON document to stdout, for success and for failure."},
+	{"--json", "Write one JSON document to stdout for the result, for success and for failure. oe auth login writes one pending event before it, while a person approves the device."},
 	{"--json-stream", "Write newline-delimited JSON progress events, then one final event, to stdout."},
 	{"--agent yes|no|auto", "Say whether a coding agent runs oe. The default, auto, reads the environment variables that coding agents set. Under an agent, the default output is JSON, and oe never prompts and never opens a browser. --agent no restores text output."},
 	{"--environment sandbox|production", "Select the environment. The default is the command's own environment, then selectedEnvironment in open-e2ee.jsonc, then sandbox."},
@@ -93,7 +92,7 @@ var exitCodeSurface = []exitCodeSpec{
 	{0, "The command succeeded."},
 	{exitFailure, "The command failed. The error and its code tell why."},
 	{exitUsage, "The command line is invalid or a required input is missing."},
-	{exitAuthentication, "Authentication is required. Run oe login."},
+	{exitAuthentication, "Authentication is required. Run oe auth login."},
 	{exitPersonAction, "A person must act before the command can continue. The error tells what to do. When action.url is present, it is the page that the person opens."},
 	{exitTemporary, "The failure is temporary. It is safe to run the same command again later. next is that command."},
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -280,5 +281,71 @@ func TestErrorDoesNotEchoBearerToken(t *testing.T) {
 func TestNewRejectsNonHTTPURLs(t *testing.T) {
 	if _, err := New("file:///tmp/control", nil); err == nil {
 		t.Fatal("accepted non-HTTP control URL")
+	}
+}
+
+func TestTermsReadAndAcceptanceUseTheConsoleShapes(t *testing.T) {
+	const documents = `[{"name":"Relay service terms","url":"https://open-e2ee.dev/legal/relay-terms/2026-08-26","version":"relay-2026-08-26"}]`
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.Method + " " + request.URL.Path {
+		case "GET /v1/terms":
+			response.Write([]byte(`{"acceptedAt":null,"canAccept":true,"documents":` + documents + `,"state":"required"}`))
+		case "POST /v1/terms/acceptance":
+			if request.Header.Get("Idempotency-Key") != "" {
+				t.Error("an acceptance carried an idempotency key")
+			}
+			body, _ := io.ReadAll(request.Body)
+			bodies = append(bodies, string(body))
+			response.Write([]byte(`{"acceptedAt":"2026-09-30T12:00:00.000Z","canAccept":true,"changed":true,"documents":` + documents + `,"state":"accepted"}`))
+		default:
+			t.Errorf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := New(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms, err := client.Terms(context.Background(), CredentialRequest{AccessToken: "token"})
+	if err != nil || terms.State != TermsRequired || !terms.CanAccept || terms.AcceptedAt != nil || len(terms.Documents) != 1 ||
+		terms.Documents[0].Version != "relay-2026-08-26" {
+		t.Fatalf("terms read: %#v %v", terms, err)
+	}
+	for _, request := range []TermsAcceptanceRequest{{Actor: "agent", AgentName: "claude-code"}, {Actor: "person"}} {
+		accepted, err := client.AcceptTerms(context.Background(), CredentialRequest{AccessToken: "token"}, request)
+		if err != nil || accepted.State != TermsAccepted || !accepted.Changed || accepted.AcceptedAt == nil {
+			t.Fatalf("acceptance: %#v %v", accepted, err)
+		}
+	}
+	if len(bodies) != 2 || bodies[0] != `{"actor":"agent","agentName":"claude-code"}` || bodies[1] != `{"actor":"person"}` {
+		t.Fatalf("acceptance bodies %q", bodies)
+	}
+}
+
+func TestTermsRefusalsKeepTheDocumentsAndRejectAnUnknownState(t *testing.T) {
+	var answer string
+	var status int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(status)
+		response.Write([]byte(answer))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, answer = http.StatusOK, `{"acceptedAt":null,"canAccept":true,"documents":[],"state":"pending"}`
+	if _, err := client.Terms(context.Background(), CredentialRequest{}); err == nil || !strings.Contains(err.Error(), `unknown terms state "pending"`) {
+		t.Fatalf("an unknown terms state was accepted: %v", err)
+	}
+	status = http.StatusConflict
+	answer = `{"code":"TERMS_REQUIRED","message":"Your Organization has not accepted the Relay service terms. Accept them, then retry.","canAccept":true,"documents":[{"name":"Relay service terms","url":"https://open-e2ee.dev/legal/relay-terms/2026-08-26","version":"relay-2026-08-26"}]}`
+	_, err = client.GetProject(context.Background(), CredentialRequest{}, "chat")
+	refusal, ok := errors.AsType[*APIError](err)
+	if !ok || refusal.Code != "TERMS_REQUIRED" || !refusal.CanAccept || len(refusal.Documents) != 1 {
+		t.Fatalf("a terms refusal lost its documents: %#v", err)
 	}
 }

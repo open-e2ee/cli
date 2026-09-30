@@ -31,8 +31,9 @@ round trip.
 
 ```text
 oe init                 initialize public policy and the local encrypted example
-oe login                use browser authorization and store the result in the OS keychain
-oe logout               remove the stored session
+oe auth login           log in with a browser, store the session in the OS keychain, and accept the terms
+oe auth status          show the user, the organization, the terms state, and the token source
+oe auth logout          remove the stored session
 oe sandbox              create the Sandbox environment, install its Relay connection, and wait for acknowledgement
 oe plan                 show the production configuration change without applying it
 oe deploy               complete the production card gate, deploy, and install its Relay connection
@@ -49,7 +50,7 @@ and the environment variables. `oe help --json` returns the same surface as
 data. `oe COMMAND --help` shows one command.
 
 Global flags can come before or after the command. Global `--json` emits one
-final JSON document. `--json-stream` emits newline-delimited progress and final
+final JSON document, and `oe auth login` emits one pending event before it. `--json-stream` emits newline-delimited progress and final
 events. `--agent yes|no|auto` says whether a coding agent runs `oe`.
 `--environment` is an advanced override. Normal work uses sandbox for
 `oe sandbox`. It uses production for `oe plan` and `oe deploy`.
@@ -69,8 +70,9 @@ oe --json version
 for example `CLAUDECODE` or `CODEX_THREAD_ID`. Under an agent, the default
 output is JSON, and `oe` never prompts and never opens a browser. Pass
 `--agent yes` for an agent that `oe` does not detect. `--agent no` restores
-text output. In JSON mode, each run writes exactly one JSON document to stdout,
-for success and for failure:
+text output. In JSON mode, each run writes one JSON document to stdout for the
+result, for success and for failure. `oe auth login` also writes one pending
+event before the result (see below).
 
 ```json
 {"status":"ok","command":"project","message":"...","data":{}}
@@ -87,21 +89,36 @@ goes to stderr as `error:`, `action:`, and `next:` lines, and stdout stays clean
 | 0         | The command succeeded.                                                                             |
 | 1         | The command failed. `code` tells why.                                                              |
 | 2         | The command line is invalid, or a required input is missing, for example `--confirm`.              |
-| 4         | Authentication is required. Run `oe login`.                                                        |
+| 4         | Authentication is required. Run `oe auth login`.                                                   |
 | 5         | A person must act. `error` tells what to do. When `action.url` is present, it is the page to open. |
 | 6         | The failure is temporary. `next` is the same command. Run it again later.                          |
 
 Log in once. A person must approve the login in a browser. Under an agent, `oe`
-does not open the browser, so start the command in the background and give the
-person the URL and code:
+does not open the browser. It writes a pending event, then the result after the
+person approves, so start the command in the background and give the person
+`action.url` and `data.userCode`:
 
 ```bash
-oe login --json-stream
+oe auth login
 ```
 
-The first event has `data.verificationUrl` and `data.userCode`. With `--json`,
-the same prompt goes to stderr. Protected CI uses a scoped `OE_ACCESS_TOKEN`
-instead of a login.
+```json
+{"status":"pending","command":"auth login","message":"A person must approve this device.","action":{"kind":"browser","url":"https://...","reason":"login"},"data":{"userCode":"ABCD-EFGH","expiresInSeconds":900}}
+{"status":"ok","command":"auth login","message":"...","data":{"terms":"required","canAccept":true,"documents":[]},"next":"oe auth login --accept-terms"}
+```
+
+The organization accepts the terms once. When `data.terms` is `required`, show
+the person the URL of each document in `data.documents`, and run
+`oe auth login --accept-terms` only after the person agrees. With a stored
+session, it starts no second login. When `canAccept` is false, an administrator
+of the organization must accept, and `--accept-terms` fails with
+`TERMS_PERMISSION_REQUIRED`, exit 5. A command that needs the terms fails with
+`TERMS_REQUIRED`, exit 5, and `data.retry` is the command to run again after the
+acceptance.
+
+`oe auth status` shows the user, the organization, the terms state, and the
+token source, and exits 4 without a session. Protected CI uses a scoped
+`OE_ACCESS_TOKEN` instead of a login.
 
 Read the Relay connection URL of a project. Text mode prints only the URL, so a
 shell can capture it:
