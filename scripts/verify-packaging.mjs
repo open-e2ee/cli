@@ -117,13 +117,21 @@ for (const contract of [
   'tags: ["v*"]',
   "gh release upload",
   "npm view",
+  "\n          cache: false\n",
+  "\n          package-manager-cache: false\n",
 ]) {
   if (!releaseWorkflow.includes(contract)) {
     throw new Error(`release workflow is missing ${contract}`);
   }
 }
 
-for (const forbidden of ["workflow_dispatch:", "NPM_BOOTSTRAP_TOKEN"]) {
+for (const forbidden of [
+  "workflow_dispatch:",
+  "NPM_BOOTSTRAP_TOKEN",
+  "cache: true",
+  "cache: npm",
+  "actions/cache",
+]) {
   if (releaseWorkflow.includes(forbidden)) {
     throw new Error(`release workflow must not contain ${forbidden}`);
   }

@@ -12,18 +12,21 @@ permissions:
 jobs:
   release:
     environment: release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # This job builds and publishes signed artifacts, so it restores no cache.
+    # A cache that a CI job wrote could otherwise change the release build.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.26.7
-          cache: true
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+          cache: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: npm
+          package-manager-cache: false
       - run: npm ci
       - name: Build release
         env:
@@ -45,7 +48,7 @@ jobs:
           sha256sum cli-sbom.cdx.json >> checksums.txt
           sort -o checksums.txt checksums.txt
       - name: Attest binaries and checksum manifest
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: dist/artifacts/*
       - name: Create or repair GitHub release
