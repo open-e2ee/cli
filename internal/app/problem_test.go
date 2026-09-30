@@ -78,7 +78,7 @@ func TestActionURLIsWrittenInTheErrorEnvelope(t *testing.T) {
 		next: "oe config push --yes", actionURL: "https://console.open-e2ee.dev/billing?project=any-chat",
 	}
 	var stdout, stderr strings.Builder
-	exit := fail(output.New(output.JSON, &stdout, &stderr), "config", []string{"--json", "config", "push", "--yes"}, refusal)
+	exit := fail(output.New(output.JSON, &stdout, &stderr), "config", []string{"--json", "config", "push", "--yes"}, "", refusal)
 	var envelope struct {
 		Code   string `json:"code"`
 		Next   string `json:"next"`
@@ -94,14 +94,14 @@ func TestActionURLIsWrittenInTheErrorEnvelope(t *testing.T) {
 	}
 
 	stdout.Reset()
-	fail(output.New(output.Text, &stdout, &stderr), "config", nil, refusal)
+	fail(output.New(output.Text, &stdout, &stderr), "config", nil, "", refusal)
 	want := "error: Production needs a card\naction: open https://console.open-e2ee.dev/billing?project=any-chat\nnext: oe config push --yes\n"
 	if stdout.Len() != 0 || stderr.String() != want {
 		t.Fatalf("text failure did not name the action: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()
-	fail(output.New(output.JSON, &stdout, &stderr), "project", nil, &problem{code: "PROJECT_NOT_FOUND", message: "not found", exit: exitFailure})
+	fail(output.New(output.JSON, &stdout, &stderr), "project", nil, "", &problem{code: "PROJECT_NOT_FOUND", message: "not found", exit: exitFailure})
 	if strings.Contains(stdout.String(), `"action"`) {
 		t.Fatalf("a failure with no action wrote one: %s", stdout.String())
 	}

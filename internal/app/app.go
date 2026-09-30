@@ -64,8 +64,8 @@ type runner struct {
 	directory   string
 	controlURL  string
 	environment string
-	// environmentExplicit is true when the caller passed --environment.
-	environmentExplicit bool
+	// environmentSelected is true when --env or OE_ENV names the environment.
+	environmentSelected bool
 	mode                output.Mode
 	// underAgent is true when a coding agent runs the CLI. Then the CLI never
 	// prompts and never opens a browser.
@@ -92,7 +92,7 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 	}
 	writer := output.New(global.mode, dependencies.Out, dependencies.Err)
 	if err != nil {
-		return fail(writer, cmp.Or(command, "oe"), args, err)
+		return fail(writer, cmp.Or(command, "oe"), args, global.environment, err)
 	}
 	if command == "" {
 		command = "help"
@@ -122,20 +122,23 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 	if dependencies.WorkingDir == "" {
 		dependencies.WorkingDir, err = os.Getwd()
 		if err != nil {
-			return fail(writer, command, args, fmt.Errorf("determine working directory: %w", err))
+			return fail(writer, command, args, global.environment, fmt.Errorf("determine working directory: %w", err))
 		}
 	}
-	if !global.environmentExplicit {
-		global.environment = defaultEnvironment(command)
+	if !global.environmentSelected {
+		global.environment, global.environmentSelected, err = defaultEnvironment(command, dependencies.Getenv)
+		if err != nil {
+			return fail(writer, command, args, global.environment, err)
+		}
 	}
 	if err := validateControlURL(global.controlURL); err != nil {
-		return fail(writer, command, args, usageError(command, err.Error()))
+		return fail(writer, command, args, global.environment, usageError(command, err.Error()))
 	}
 	api := dependencies.API
 	if api == nil {
 		api, err = control.New(global.controlURL, dependencies.HTTP)
 		if err != nil {
-			return fail(writer, command, args, usageError(command, err.Error()))
+			return fail(writer, command, args, global.environment, usageError(command, err.Error()))
 		}
 	}
 	r := &runner{
@@ -144,19 +147,20 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 		openURL: dependencies.OpenURL, sleep: dependencies.Sleep, now: dependencies.Now,
 		getenv: dependencies.Getenv, directory: dependencies.WorkingDir,
 		controlURL: global.controlURL, environment: global.environment,
-		environmentExplicit: global.environmentExplicit, mode: global.mode,
+		environmentSelected: global.environmentSelected, mode: global.mode,
 		underAgent: underAgent, harness: harness,
 	}
 	if err := r.execute(ctx, command, commandArgs); err != nil {
-		return fail(writer, envelopeCommand(command, commandArgs), args, err)
+		return fail(writer, envelopeCommand(command, commandArgs), args, r.environment, err)
 	}
 	return 0
 }
 
 // fail writes one failure and returns the exit status of its code. args is
 // the command line of the run, which a temporary failure names as next.
-func fail(writer *output.Writer, command string, args []string, err error) int {
-	failure := classify(err, commandLine(args))
+// environment is the environment of the run, which some codes need for next.
+func fail(writer *output.Writer, command string, args []string, environment string, err error) int {
+	failure := classify(err, commandLine(args), environment)
 	_ = writer.Failure(command, failure.output())
 	return failure.exit
 }
@@ -378,22 +382,12 @@ func (r *runner) sandbox(ctx context.Context, args []string) error {
 	if *noWait {
 		return r.out.Success("sandbox", "The Sandbox environment is ready. First-acknowledgement waiting was skipped.", map[string]any{"environment": "sandbox", "waiting": false})
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, *timeout)
-	defer cancel()
-	for {
-		state, err := r.api.Activation(waitCtx, control.CredentialRequest{AccessToken: access.AccessToken}, value.Project)
-		if err != nil {
-			return err
-		}
-		if state.FirstDevice && state.FirstAcknowledged {
-			return r.out.Success("sandbox", "The first managed message was acknowledged.", map[string]any{
-				"environment": "sandbox", "firstDevice": true, "firstAcknowledgedMessage": true,
-			})
-		}
-		if err := r.sleep(waitCtx, 2*time.Second); err != nil {
-			return fmt.Errorf("wait for first acknowledged managed message: %w", err)
-		}
+	if err := r.waitForFirstMessage(ctx, access, value.Project, *timeout); err != nil {
+		return err
 	}
+	return r.out.Success("sandbox", "The first managed message was acknowledged.", map[string]any{
+		"environment": "sandbox", "firstDevice": true, "firstAcknowledgedMessage": true,
+	})
 }
 
 func (r *runner) plan(ctx context.Context, args []string) error {
@@ -529,75 +523,6 @@ func (r *runner) billingSetupRequired(plan control.Plan, access credential.Crede
 	}
 }
 
-func (r *runner) doctor(ctx context.Context, args []string) error {
-	if err := parseFlags(newFlags("doctor"), "doctor", args); err != nil {
-		return err
-	}
-	checks := map[string]any{"config": "ok", "control": "ok", "credential": "ok", "relay": "ok", "telemetry": "disabled"}
-	path, value, err := r.loadConfig()
-	if err != nil {
-		return fmt.Errorf("doctor found a problem: %w", err)
-	}
-	connection, err := envfile.Detect(filepath.Dir(path), "")
-	if err != nil {
-		return fmt.Errorf("doctor found a problem: %w", err)
-	}
-	environmentFile := environmentFiles[r.environment]
-	local, err := envfile.Read(filepath.Join(filepath.Dir(path), environmentFile), connection.Variable)
-	if err != nil {
-		return fmt.Errorf("doctor found a problem: %w", err)
-	}
-	if local == "" {
-		failure := environmentNotActive(value.Project, r.environment)
-		failure.code = "RELAY_CONNECTION_MISSING"
-		failure.message = fmt.Sprintf("doctor found a problem: the %s Relay connection is not in %s", r.environment, environmentFile)
-		return failure
-	}
-	if err := r.api.Health(ctx); err != nil {
-		return fmt.Errorf("doctor found a problem: control API: %w", err)
-	}
-	access, err := r.access(ctx, "project:read", false)
-	if err != nil {
-		return fmt.Errorf("doctor found a problem: credential: %w", err)
-	}
-	project, err := r.api.GetProject(ctx, control.CredentialRequest{AccessToken: access.AccessToken}, value.Project)
-	if err != nil {
-		return fmt.Errorf("doctor found a problem: project authority: %w", err)
-	}
-	expected := ""
-	if environment := environmentOf(project, r.environment); environment != nil {
-		expected = environment.RelayURL
-	}
-	if expected == "" {
-		return environmentNotActive(value.Project, r.environment)
-	}
-	if expected != local {
-		return &problem{
-			code: "RELAY_CONNECTION_STALE", exit: exitFailure, next: "oe project select " + value.Project,
-			message: fmt.Sprintf("doctor found a problem: the local %s Relay connection is stale or belongs to another project", r.environment),
-		}
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, local, nil)
-	if err != nil {
-		return fmt.Errorf("doctor found a problem: Relay connection is invalid")
-	}
-	request.Header.Set("Accept", "application/json")
-	response, err := r.http.Do(request)
-	if err != nil {
-		return fmt.Errorf("doctor found a problem: Relay connection is unreachable")
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("doctor found a problem: Relay connection returned status %d", response.StatusCode)
-	}
-	origin, _ := url.Parse(local)
-	checks["project"] = value.Project
-	checks["environment"] = r.environment
-	checks["configurationSource"] = environmentFile
-	checks["relayOrigin"] = origin.Scheme + "://" + origin.Host
-	return r.out.Success("doctor", "All checks passed. CLI telemetry is disabled.", checks)
-}
-
 func (r *runner) project(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return usageError("project", "name a project command: show, connection, or select")
@@ -612,7 +537,7 @@ func (r *runner) project(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		return r.out.Success("project", projectText(project), map[string]any{"project": projectSummary(project)})
+		return r.out.Success("project", projectText(project, r.shownEnvironments()), map[string]any{"project": projectSummary(project, r.shownEnvironments())})
 	case "connection":
 		slug, err := r.projectArgument("project connection", args[1:])
 		if err != nil {
@@ -728,11 +653,20 @@ func environmentNotActive(project, environment string) *problem {
 	}
 }
 
+// shownEnvironments gives the environments that oe project show reads: the
+// one that --env or OE_ENV names, else both.
+func (r *runner) shownEnvironments() []string {
+	if r.environmentSelected {
+		return []string{r.environment}
+	}
+	return []string{"sandbox", "production"}
+}
+
 // projectSummary leaves out each Relay connection URL. Only oe project
 // connection prints one, so a routine read does not copy it into a log.
-func projectSummary(project control.Project) map[string]any {
+func projectSummary(project control.Project, names []string) map[string]any {
 	environments := map[string]any{}
-	for _, name := range []string{"sandbox", "production"} {
+	for _, name := range names {
 		environment := environmentOf(project, name)
 		if environment == nil || environment.RelayURL == "" {
 			environments[name] = map[string]any{"active": false}
@@ -752,10 +686,10 @@ func projectSummary(project control.Project) map[string]any {
 	}
 }
 
-func projectText(project control.Project) string {
+func projectText(project control.Project, names []string) string {
 	var text strings.Builder
 	fmt.Fprintf(&text, "Project %s (writer: %s)", project.Slug, project.Writer)
-	for _, name := range []string{"sandbox", "production"} {
+	for _, name := range names {
 		environment := environmentOf(project, name)
 		if environment == nil || environment.RelayURL == "" {
 			fmt.Fprintf(&text, "\n  %s: not active", name)
@@ -763,7 +697,7 @@ func projectText(project control.Project) string {
 		}
 		fmt.Fprintf(&text, "\n  %s: active, revision %s", name, environment.Revision)
 	}
-	text.WriteString("\nRun oe project connection --environment sandbox|production for a Relay connection URL.")
+	text.WriteString("\nRun oe project connection --env sandbox|production for a Relay connection URL.")
 	return text.String()
 }
 
@@ -1111,7 +1045,7 @@ type globalOptions struct {
 	agent               agent.Mode
 	controlURL          string
 	environment         string
-	environmentExplicit bool
+	environmentSelected bool
 }
 
 // parseGlobal reads the global flags before or after the command, up to a
@@ -1139,7 +1073,7 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 			options.mode, options.modeExplicit = output.JSON, true
 		case argument == "--json-stream":
 			options.mode, options.modeExplicit = output.JSONStream, true
-		case name == "--control-url" || name == "--environment" || name == "--agent":
+		case name == "--control-url" || name == "--env" || name == "-e" || name == "--agent":
 			if !inline {
 				if index+1 == len(args) {
 					failure = cmp.Or(failure, usageError(command, name+" needs a value"))
@@ -1155,7 +1089,7 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 				options.agent = agent.Mode(value)
 			default:
 				options.environment = value
-				options.environmentExplicit = true
+				options.environmentSelected = true
 			}
 		case command != "":
 			rest = append(rest, argument)
@@ -1169,8 +1103,8 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 			command = argument
 		}
 	}
-	if failure == nil && options.environmentExplicit && options.environment != "sandbox" && options.environment != "production" {
-		failure = usageError(command, "--environment must be sandbox or production")
+	if failure == nil && options.environmentSelected && options.environment != "sandbox" && options.environment != "production" {
+		failure = usageError(command, "--env must be sandbox or production")
 	}
 	if !options.agent.Valid() {
 		failure = cmp.Or(failure, usageError(command, "--agent must be yes, no, or auto"))
@@ -1179,12 +1113,25 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 	return options, command, rest, failure
 }
 
-func defaultEnvironment(command string) string {
+// defaultEnvironment gives the environment of a run without --env. doctor,
+// project, and notifications take OE_ENV, then sandbox. plan and deploy keep
+// Production, and sandbox keeps Sandbox, so a variable left in a shell never
+// changes the target of a deploy.
+func defaultEnvironment(command string, getenv func(string) string) (string, bool, error) {
 	switch command {
 	case "plan", "deploy":
-		return "production"
+		return "production", false, nil
+	case "doctor", "project", "notifications":
+		selected := getenv("OE_ENV")
+		if selected == "" {
+			return "sandbox", false, nil
+		}
+		if selected != "sandbox" && selected != "production" {
+			return "", false, usageError(command, "OE_ENV must be sandbox or production")
+		}
+		return selected, true, nil
 	}
-	return "sandbox"
+	return "sandbox", false, nil
 }
 
 func containsHelp(args []string) bool {
