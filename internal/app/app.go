@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -28,20 +29,21 @@ import (
 
 const defaultControlURL = "https://console.open-e2ee.dev/api/cli"
 
-var commands = []string{"init", "login", "sandbox", "deploy", "plan", "doctor", "project", "notifications"}
-
 type Dependencies struct {
-	API        control.API
-	Store      credential.Store
-	HTTP       *http.Client
-	In         io.Reader
-	Out        io.Writer
-	Err        io.Writer
-	OpenURL    func(string) error
-	Sleep      func(context.Context, time.Duration) error
-	Now        func() time.Time
-	Getenv     func(string) string
-	WorkingDir string
+	API     control.API
+	Store   credential.Store
+	HTTP    *http.Client
+	In      io.Reader
+	Out     io.Writer
+	Err     io.Writer
+	OpenURL func(string) error
+	Sleep   func(context.Context, time.Duration) error
+	Now     func() time.Time
+	Getenv  func(string) string
+	// Interactive reports whether a person can answer a prompt. The default is
+	// true only when In is a terminal.
+	Interactive func() bool
+	WorkingDir  string
 }
 
 type runner struct {
@@ -49,6 +51,7 @@ type runner struct {
 	http        *http.Client
 	store       credential.Store
 	in          io.Reader
+	interactive func() bool
 	out         *output.Writer
 	errOut      io.Writer
 	openURL     func(string) error
@@ -58,26 +61,32 @@ type runner struct {
 	directory   string
 	controlURL  string
 	environment string
-	mode        output.Mode
+	// environmentExplicit is true when the caller passed --environment.
+	environmentExplicit bool
+	mode                output.Mode
 }
 
 func Run(ctx context.Context, args []string, dependencies Dependencies) int {
-	global, command, commandArgs, err := parseGlobal(args)
-	if err != nil {
-		fmt.Fprintf(defaultWriter(dependencies.Err, os.Stderr), "error: %v\n", err)
-		return 2
-	}
-	if command == "" {
-		command = "help"
-	}
 	if dependencies.Out == nil {
 		dependencies.Out = os.Stdout
 	}
 	if dependencies.Err == nil {
 		dependencies.Err = os.Stderr
 	}
+	global, command, commandArgs, err := parseGlobal(args)
+	writer := output.New(global.mode, dependencies.Out, dependencies.Err)
+	if err != nil {
+		return fail(writer, cmp.Or(command, "oe"), err)
+	}
+	if command == "" {
+		command = "help"
+	}
 	if dependencies.In == nil {
 		dependencies.In = os.Stdin
+	}
+	if dependencies.Interactive == nil {
+		in := dependencies.In
+		dependencies.Interactive = func() bool { return isTerminal(in) }
 	}
 	if dependencies.Store == nil {
 		dependencies.Store = credential.Keychain{}
@@ -100,37 +109,41 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 	if dependencies.WorkingDir == "" {
 		dependencies.WorkingDir, err = os.Getwd()
 		if err != nil {
-			fmt.Fprintf(dependencies.Err, "error: determine working directory: %v\n", err)
-			return 1
+			return fail(writer, command, fmt.Errorf("determine working directory: %w", err))
 		}
 	}
 	if !global.environmentExplicit {
 		global.environment = defaultEnvironment(command, dependencies.WorkingDir)
 	}
 	if err := validateControlURL(global.controlURL); err != nil {
-		fmt.Fprintf(dependencies.Err, "error: %v\n", err)
-		return 2
+		return fail(writer, command, usageError(command, err.Error()))
 	}
 	api := dependencies.API
 	if api == nil {
 		api, err = control.New(global.controlURL, dependencies.HTTP)
 		if err != nil {
-			fmt.Fprintf(dependencies.Err, "error: %v\n", err)
-			return 2
+			return fail(writer, command, usageError(command, err.Error()))
 		}
 	}
 	r := &runner{
 		api: api, http: dependencies.HTTP, store: dependencies.Store, in: dependencies.In,
-		out: output.New(global.mode, dependencies.Out), errOut: dependencies.Err,
+		interactive: dependencies.Interactive, out: writer, errOut: dependencies.Err,
 		openURL: dependencies.OpenURL, sleep: dependencies.Sleep, now: dependencies.Now,
 		getenv: dependencies.Getenv, directory: dependencies.WorkingDir,
-		controlURL: global.controlURL, environment: global.environment, mode: global.mode,
+		controlURL: global.controlURL, environment: global.environment,
+		environmentExplicit: global.environmentExplicit, mode: global.mode,
 	}
 	if err := r.execute(ctx, command, commandArgs); err != nil {
-		_ = r.out.Failure(command, err)
-		return 1
+		return fail(writer, command, err)
 	}
 	return 0
+}
+
+// fail writes one failure and returns the exit status of its code.
+func fail(writer *output.Writer, command string, err error) int {
+	failure := classify(err)
+	_ = writer.Failure(command, failure.output())
+	return failure.exit
 }
 
 func (r *runner) execute(ctx context.Context, command string, args []string) error {
@@ -138,14 +151,25 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 		return r.commandHelp(command)
 	}
 	switch command {
-	case "help", "--help", "-h":
+	case "help":
+		if len(args) > 1 {
+			return usageError("help", "help takes at most one command")
+		}
+		if len(args) == 1 {
+			return r.commandHelp(args[0])
+		}
 		return r.help()
-	case "version", "--version":
+	case "version":
+		if len(args) != 0 {
+			return usageError("version", "version takes no arguments")
+		}
 		return r.out.Success("version", Version, map[string]any{"version": Version})
 	case "init":
 		return r.init(args)
 	case "login":
 		return r.login(ctx, args)
+	case "logout":
+		return r.logout(args)
 	case "sandbox":
 		return r.sandbox(ctx, args)
 	case "plan":
@@ -159,31 +183,8 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 	case "notifications":
 		return r.notifications(ctx, args)
 	default:
-		return fmt.Errorf("unknown command %q", command)
+		return unknownCommand(command)
 	}
-}
-
-func (r *runner) commandHelp(command string) error {
-	usage := map[string]string{
-		"init":          "oe init [--directory PATH] [--name PROJECT] [--force]",
-		"login":         "oe login [--timeout DURATION]",
-		"sandbox":       "oe sandbox [--timeout DURATION] [--no-wait]",
-		"plan":          "oe plan",
-		"deploy":        "oe deploy [--confirm]",
-		"doctor":        "oe doctor",
-		"project":       "oe project <show|select PROJECT>",
-		"notifications": "oe notifications <status|setup ios|add-nse|apple-filtering-request|verify ios>",
-		"version":       "oe version",
-	}
-	text, ok := usage[command]
-	if !ok {
-		return fmt.Errorf("unknown command %q", command)
-	}
-	return r.out.Success(command, text, map[string]any{"usage": text})
-}
-
-func (r *runner) help() error {
-	return r.out.Success("help", "Use oe <command> --help for command details.", map[string]any{"commands": commands})
 }
 
 func (r *runner) init(args []string) error {
@@ -191,7 +192,7 @@ func (r *runner) init(args []string) error {
 	directory := flags.String("directory", r.directory, "project directory")
 	name := flags.String("name", "", "project slug")
 	force := flags.Bool("force", false, "replace an existing config")
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(flags, "init", args); err != nil {
 		return err
 	}
 	project := *name
@@ -203,7 +204,10 @@ func (r *runner) init(args []string) error {
 		return err
 	}
 	if _, err := os.Stat(path); err == nil && !*force {
-		return fmt.Errorf("%s already exists; use --force to replace it", path)
+		return &problem{
+			code: "CONFIG_EXISTS", message: path + " already exists; use --force to replace it",
+			next: "oe init --force", exit: exitFailure,
+		}
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
@@ -213,6 +217,9 @@ func (r *runner) init(args []string) error {
 	}
 	defer lock.Release()
 	if err := config.Write(path, config.New(project)); err != nil {
+		return err
+	}
+	if err := ensureIgnored(*directory, projectlock.Filename); err != nil {
 		return err
 	}
 	quickstart := filepath.Join(*directory, "open-e2ee-local.mjs")
@@ -229,7 +236,7 @@ func (r *runner) init(args []string) error {
 func (r *runner) login(ctx context.Context, args []string) error {
 	flags := newFlags("login")
 	timeout := flags.Duration("timeout", 5*time.Minute, "login timeout")
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(flags, "login", args); err != nil {
 		return err
 	}
 	if r.getenv("OE_ACCESS_TOKEN") != "" {
@@ -240,6 +247,25 @@ func (r *runner) login(ctx context.Context, args []string) error {
 		return err
 	}
 	return r.out.Success("login", "Login complete. The credential is in the OS keychain.", map[string]any{"source": value.Source})
+}
+
+func (r *runner) logout(args []string) error {
+	if err := parseFlags(newFlags("logout"), "logout", args); err != nil {
+		return err
+	}
+	profile, err := credential.Profile(r.controlURL)
+	if err != nil {
+		return err
+	}
+	if err := r.store.Delete(profile); err != nil {
+		return err
+	}
+	message := "Logged out. The OS keychain holds no session for " + profile + "."
+	environment := r.getenv("OE_ACCESS_TOKEN") != ""
+	if environment {
+		message += " OE_ACCESS_TOKEN is still set, so later commands still use it."
+	}
+	return r.out.Success("logout", message, map[string]any{"profile": profile, "environmentCredential": environment})
 }
 
 func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (credential.Credential, error) {
@@ -254,12 +280,18 @@ func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (c
 	if authorization.DeviceCode == "" || authorization.VerificationURL == "" || authorization.UserCode == "" {
 		return credential.Credential{}, errors.New("control API returned an incomplete browser authorization")
 	}
-	_ = r.out.Progress("login", fmt.Sprintf("Open %s and enter code %s.", authorization.VerificationURL, authorization.UserCode), map[string]any{
+	prompt := fmt.Sprintf("Open %s and enter code %s.", authorization.VerificationURL, authorization.UserCode)
+	_ = r.out.Progress("login", prompt, map[string]any{
 		"verificationUrl": authorization.VerificationURL, "userCode": authorization.UserCode,
 	})
-	if err := r.openURL(authorization.VerificationURL); err != nil {
-		fmt.Fprintf(r.errOut, "Open %s and enter code %s.\n", authorization.VerificationURL, authorization.UserCode)
+	if r.mode == output.JSON {
+		// JSON mode keeps stdout for the one final document, so the person who
+		// approves the login reads the prompt on stderr.
+		fmt.Fprintln(r.errOut, prompt)
 	}
+	// The prompt is already visible, so a browser that cannot open is not a
+	// failure.
+	_ = r.openURL(authorization.VerificationURL)
 	interval := time.Duration(authorization.IntervalSeconds) * time.Second
 	if interval < time.Second {
 		interval = 2 * time.Second
@@ -302,15 +334,24 @@ func (r *runner) sandbox(ctx context.Context, args []string) error {
 	flags := newFlags("sandbox")
 	timeout := flags.Duration("timeout", 30*time.Minute, "first acknowledgement timeout")
 	noWait := flags.Bool("no-wait", false, "do not wait for the first acknowledgement")
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(flags, "sandbox", args); err != nil {
 		return err
+	}
+	if r.environment != "sandbox" {
+		return &problem{
+			code: "USAGE_ERROR", message: "oe sandbox targets the Sandbox environment; use oe deploy for Production",
+			next: "oe deploy", exit: exitUsage,
+		}
 	}
 	path, value, err := r.loadConfig()
 	if err != nil {
 		return err
 	}
 	if value.Writer != "config" {
-		return errors.New("this project is console-first; change writer mode before oe sandbox can write policy")
+		return &problem{
+			code: "CONSOLE_WRITER", exit: exitFailure,
+			message: "this project is console-first; change writer mode before oe sandbox can write policy",
+		}
 	}
 	lock, err := projectlock.Acquire(ctx, filepath.Dir(path))
 	if err != nil {
@@ -374,8 +415,7 @@ func (r *runner) sandbox(ctx context.Context, args []string) error {
 }
 
 func (r *runner) plan(ctx context.Context, args []string) error {
-	flags := newFlags("plan")
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(newFlags("plan"), "plan", args); err != nil {
 		return err
 	}
 	value, project, access, err := r.deployContext(ctx, "project:read")
@@ -408,11 +448,14 @@ func (r *runner) plan(ctx context.Context, args []string) error {
 func (r *runner) deploy(ctx context.Context, args []string) error {
 	flags := newFlags("deploy")
 	confirm := flags.Bool("confirm", false, "confirm the production deploy")
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(flags, "deploy", args); err != nil {
 		return err
 	}
 	if r.environment != "production" {
-		return errors.New("oe deploy targets production; use oe sandbox for the Sandbox environment")
+		return &problem{
+			code: "USAGE_ERROR", message: "oe deploy targets Production; use oe sandbox for the Sandbox environment",
+			next: "oe sandbox", exit: exitUsage,
+		}
 	}
 	value, project, access, err := r.deployContext(ctx, "deploy:write")
 	if err != nil {
@@ -442,27 +485,22 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 		return err
 	}
 	if !plan.BillingReady {
-		if access.Source == "environment" {
-			return errors.New("production billing setup is incomplete; finish it in the console before a CI deploy")
-		}
-		if plan.BillingSetupURL == "" {
-			return errors.New("production billing setup is incomplete and no setup URL was returned")
-		}
-		if err := r.openURL(plan.BillingSetupURL); err != nil {
-			return fmt.Errorf("open production card setup: %w", err)
-		}
-		return errors.New("finish production card setup, then run oe deploy again")
+		return r.billingSetupRequired(plan, access)
 	}
 	if !*confirm {
-		if access.Source == "environment" || r.mode != output.Text {
-			return errors.New("production deploy requires --confirm in CI and JSON modes")
+		if access.Source == "environment" || r.mode != output.Text || !r.interactive() {
+			return &problem{
+				code: "CONFIRMATION_REQUIRED", exit: exitUsage, next: "oe deploy --confirm",
+				message: fmt.Sprintf("a production deploy of %d change(s) needs --confirm when no person can answer a prompt; review the changes, then run oe deploy --confirm", len(plan.Changes)),
+				data:    map[string]any{"planId": plan.ID, "environment": plan.Environment, "changes": plan.Changes},
+			}
 		}
 		approved, err := askConfirmation(r.in, r.errOut, fmt.Sprintf("Deploy %d production change(s)?", len(plan.Changes)))
 		if err != nil {
 			return err
 		}
 		if !approved {
-			return errors.New("production deploy cancelled")
+			return &problem{code: "DEPLOY_CANCELLED", message: "production deploy cancelled", exit: exitFailure}
 		}
 	}
 	operation, err := operationID()
@@ -495,9 +533,25 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 	})
 }
 
+// billingSetupRequired stops a deploy before a production mutation. It opens
+// the setup page for a person and always returns the URL, so a caller without
+// a browser can hand it on.
+func (r *runner) billingSetupRequired(plan control.Plan, access credential.Credential) error {
+	if plan.BillingSetupURL == "" {
+		return &problem{code: "BILLING_SETUP_REQUIRED", message: "production billing setup is incomplete and the control API returned no setup URL", exit: exitFailure}
+	}
+	if access.Source != "environment" {
+		_ = r.openURL(plan.BillingSetupURL)
+	}
+	return &problem{
+		code: "BILLING_SETUP_REQUIRED", exit: exitFailure, next: "oe deploy",
+		message: "production billing setup is incomplete; finish it at " + plan.BillingSetupURL + ", then run oe deploy again",
+		data:    map[string]any{"billingSetupUrl": plan.BillingSetupURL},
+	}
+}
+
 func (r *runner) doctor(ctx context.Context, args []string) error {
-	flags := newFlags("doctor")
-	if err := flags.Parse(args); err != nil {
+	if err := parseFlags(newFlags("doctor"), "doctor", args); err != nil {
 		return err
 	}
 	checks := map[string]any{"config": "ok", "control": "ok", "credential": "ok", "relay": "ok", "telemetry": "disabled"}
@@ -507,11 +561,10 @@ func (r *runner) doctor(ctx context.Context, args []string) error {
 	}
 	local := value.Environments[r.environment].RelayURL
 	if local == "" {
-		command := "oe sandbox"
-		if r.environment == "production" {
-			command = "oe deploy"
-		}
-		return fmt.Errorf("doctor found a problem: %s Relay connection is not configured; run %s", r.environment, command)
+		failure := environmentNotActive(value.Project, r.environment)
+		failure.code = "RELAY_CONNECTION_MISSING"
+		failure.message = fmt.Sprintf("doctor found a problem: the %s Relay connection is not in %s", r.environment, config.Filename)
+		return failure
 	}
 	if err := r.api.Health(ctx); err != nil {
 		return fmt.Errorf("doctor found a problem: control API: %w", err)
@@ -525,20 +578,17 @@ func (r *runner) doctor(ctx context.Context, args []string) error {
 		return fmt.Errorf("doctor found a problem: project authority: %w", err)
 	}
 	expected := ""
-	if project.Sandbox != nil {
-		expected = project.Sandbox.RelayURL
-	}
-	if r.environment == "production" {
-		expected = ""
-		if project.Production != nil {
-			expected = project.Production.RelayURL
-		}
+	if environment := environmentOf(project, r.environment); environment != nil {
+		expected = environment.RelayURL
 	}
 	if expected == "" {
-		return fmt.Errorf("doctor found a problem: %s is not active", r.environment)
+		return environmentNotActive(value.Project, r.environment)
 	}
 	if expected != local {
-		return fmt.Errorf("doctor found a problem: local %s Relay connection is stale or belongs to another project; select the project again", r.environment)
+		return &problem{
+			code: "RELAY_CONNECTION_STALE", exit: exitFailure, next: "oe project select " + value.Project,
+			message: fmt.Sprintf("doctor found a problem: the local %s Relay connection is stale or belongs to another project", r.environment),
+		}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, local, nil)
 	if err != nil {
@@ -563,33 +613,53 @@ func (r *runner) doctor(ctx context.Context, args []string) error {
 
 func (r *runner) project(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: oe project <show|select>")
+		return usageError("project", "name a project command: show, connection, or select")
 	}
-	access, err := r.access(ctx, "project:read", false)
-	if err != nil {
-		return err
-	}
-	request := control.CredentialRequest{AccessToken: access.AccessToken}
 	switch args[0] {
 	case "show":
-		_, value, err := r.loadConfig()
+		slug, err := r.projectArgument("project show", args[1:])
 		if err != nil {
 			return err
 		}
-		project, err := r.api.GetProject(ctx, request, value.Project)
+		project, err := r.readProject(ctx, slug)
 		if err != nil {
 			return err
 		}
-		return r.out.Success("project", "Project loaded.", map[string]any{"project": projectSummary(project)})
+		return r.out.Success("project", projectText(project), map[string]any{"project": projectSummary(project)})
+	case "connection":
+		slug, err := r.projectArgument("project connection", args[1:])
+		if err != nil {
+			return err
+		}
+		project, err := r.readProject(ctx, slug)
+		if err != nil {
+			return err
+		}
+		relayURL := ""
+		if environment := environmentOf(project, r.environment); environment != nil {
+			relayURL = environment.RelayURL
+		}
+		if relayURL == "" {
+			return environmentNotActive(project.Slug, r.environment)
+		}
+		// Text mode prints only the URL, so a shell can capture it.
+		return r.out.Success("project", relayURL, map[string]any{
+			"project": project.Slug, "environment": r.environment,
+			"relayUrl": relayURL, "variable": "OPEN_E2EE_RELAY_URL",
+		})
 	case "select":
-		if len(args) != 2 {
-			return errors.New("usage: oe project select <project>")
-		}
-		project, err := r.api.GetProject(ctx, request, args[1])
-		if err != nil {
+		flags := newFlags("project select")
+		if err := parseArguments(flags, "project", args[1:]); err != nil {
 			return err
+		}
+		if flags.NArg() != 1 {
+			return usageError("project", "oe project select needs exactly one PROJECT")
 		}
 		path, value, err := r.loadConfig()
+		if err != nil {
+			return err
+		}
+		project, err := r.readProject(ctx, flags.Arg(0))
 		if err != nil {
 			return err
 		}
@@ -625,25 +695,104 @@ func (r *runner) project(ctx context.Context, args []string) error {
 		}
 		return r.out.Success("project", "Selected project "+project.Slug+".", map[string]any{"project": project.Slug})
 	default:
-		return fmt.Errorf("unknown project command %q", args[0])
+		return usageError("project", fmt.Sprintf("unknown project command %q", args[0]))
 	}
 }
 
-func projectSummary(project control.Project) map[string]string {
-	return map[string]string{
-		"slug":   project.Slug,
-		"writer": project.Writer,
+// projectArgument returns the PROJECT argument, or the project in
+// open-e2ee.jsonc when the caller names none.
+func (r *runner) projectArgument(command string, args []string) (string, error) {
+	flags := newFlags(command)
+	if err := parseArguments(flags, "project", args); err != nil {
+		return "", err
 	}
+	switch flags.NArg() {
+	case 0:
+		_, value, err := r.loadConfig()
+		if err != nil {
+			return "", err
+		}
+		return value.Project, nil
+	case 1:
+		return flags.Arg(0), nil
+	default:
+		return "", usageError("project", "oe "+command+" takes at most one PROJECT")
+	}
+}
+
+func (r *runner) readProject(ctx context.Context, slug string) (control.Project, error) {
+	access, err := r.access(ctx, "project:read", false)
+	if err != nil {
+		return control.Project{}, err
+	}
+	return r.api.GetProject(ctx, control.CredentialRequest{AccessToken: access.AccessToken}, slug)
+}
+
+func environmentOf(project control.Project, environment string) *control.ProjectEnvironment {
+	if environment == "production" {
+		return project.Production
+	}
+	return project.Sandbox
+}
+
+func environmentNotActive(project, environment string) *problem {
+	next := "oe sandbox"
+	if environment == "production" {
+		next = "oe deploy"
+	}
+	return &problem{
+		code: "ENVIRONMENT_NOT_ACTIVE", exit: exitFailure, next: next,
+		message: fmt.Sprintf("the %s environment of project %s is not active", environment, project),
+	}
+}
+
+// projectSummary leaves out each Relay connection URL. Only oe project
+// connection prints one, so a routine read does not copy it into a log.
+func projectSummary(project control.Project) map[string]any {
+	environments := map[string]any{}
+	for _, name := range []string{"sandbox", "production"} {
+		environment := environmentOf(project, name)
+		if environment == nil || environment.RelayURL == "" {
+			environments[name] = map[string]any{"active": false}
+			continue
+		}
+		environments[name] = map[string]any{
+			"active":                     true,
+			"revision":                   environment.Revision,
+			"attachmentRetentionSeconds": environment.AttachmentRetentionSeconds,
+			"deliveryTtlSeconds":         environment.DeliveryTtlSeconds,
+		}
+	}
+	return map[string]any{
+		"slug":         project.Slug,
+		"writer":       project.Writer,
+		"environments": environments,
+	}
+}
+
+func projectText(project control.Project) string {
+	var text strings.Builder
+	fmt.Fprintf(&text, "Project %s (writer: %s)", project.Slug, project.Writer)
+	for _, name := range []string{"sandbox", "production"} {
+		environment := environmentOf(project, name)
+		if environment == nil || environment.RelayURL == "" {
+			fmt.Fprintf(&text, "\n  %s: not active", name)
+			continue
+		}
+		fmt.Fprintf(&text, "\n  %s: active, revision %s", name, environment.Revision)
+	}
+	text.WriteString("\nRun oe project connection --environment sandbox|production for a Relay connection URL.")
+	return text.String()
 }
 
 func (r *runner) notifications(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: oe notifications <status|setup ios|add-nse|apple-filtering-request|verify ios>")
+		return usageError("notifications", "name a notifications command: status, setup ios, add-nse, verify ios, or apple-filtering-request")
 	}
 	switch args[0] {
 	case "status":
 		if len(args) != 1 {
-			return errors.New("usage: oe notifications status")
+			return usageError("notifications", "usage: oe notifications status")
 		}
 		configuration, err := r.notificationConfiguration(ctx, "project:read")
 		if err != nil {
@@ -656,16 +805,16 @@ func (r *runner) notifications(ctx context.Context, args []string) error {
 		})
 	case "setup":
 		if len(args) < 2 || args[1] != "ios" {
-			return errors.New("usage: oe notifications setup ios [--profile background-only|visible-alert]")
+			return usageError("notifications", "usage: oe notifications setup ios [--profile background-only|visible-alert]")
 		}
 		flags := newFlags("notifications setup ios")
 		profile := flags.String("profile", string(control.NotificationBackgroundOnly), "device notification profile")
-		if err := flags.Parse(args[2:]); err != nil {
+		if err := parseFlags(flags, "notifications", args[2:]); err != nil {
 			return err
 		}
 		selected := control.NotificationProfile(*profile)
 		if selected != control.NotificationBackgroundOnly && selected != control.NotificationVisibleAlert {
-			return errors.New("--profile must be background-only or visible-alert")
+			return usageError("notifications", "--profile must be background-only or visible-alert")
 		}
 		root, _, err := r.loadConfig()
 		if err != nil {
@@ -688,7 +837,7 @@ func (r *runner) notifications(ctx context.Context, args []string) error {
 		})
 	case "add-nse":
 		if len(args) != 1 {
-			return errors.New("usage: oe notifications add-nse")
+			return usageError("notifications", "usage: oe notifications add-nse")
 		}
 		root, _, err := r.loadConfig()
 		if err != nil {
@@ -711,7 +860,7 @@ func (r *runner) notifications(ctx context.Context, args []string) error {
 		})
 	case "apple-filtering-request":
 		if len(args) != 1 {
-			return errors.New("usage: oe notifications apple-filtering-request")
+			return usageError("notifications", "usage: oe notifications apple-filtering-request")
 		}
 		return r.out.Success("notifications", "Apple notification filtering is optional. It permits an approved Notification Service Extension to suppress an alert; it does not improve APNs delivery or execution.", map[string]any{
 			"activation": "blocked until Apple approval, signed extension inspection, and physical-device suppression evidence pass",
@@ -719,11 +868,11 @@ func (r *runner) notifications(ctx context.Context, args []string) error {
 		})
 	case "verify":
 		if len(args) < 2 || args[1] != "ios" {
-			return errors.New("usage: oe notifications verify ios [--app-bundle PATH]")
+			return usageError("notifications", "usage: oe notifications verify ios [--app-bundle PATH]")
 		}
 		flags := newFlags("notifications verify ios")
 		appBundle := flags.String("app-bundle", "", "signed .app bundle to inspect")
-		if err := flags.Parse(args[2:]); err != nil {
+		if err := parseFlags(flags, "notifications", args[2:]); err != nil {
 			return err
 		}
 		configuration, err := r.notificationConfiguration(ctx, "project:read")
@@ -759,7 +908,7 @@ func (r *runner) notifications(ctx context.Context, args []string) error {
 			"signedBundle":    signed,
 		})
 	default:
-		return fmt.Errorf("unknown notifications command %q", args[0])
+		return usageError("notifications", fmt.Sprintf("unknown notifications command %q", args[0]))
 	}
 }
 
@@ -836,7 +985,10 @@ func (r *runner) deployContext(ctx context.Context, scope string) (config.Config
 		return config.Config{}, control.Project{}, credential.Credential{}, err
 	}
 	if value.Writer != "config" {
-		return config.Config{}, control.Project{}, credential.Credential{}, errors.New("this project is console-first; repository deploys are disabled")
+		return config.Config{}, control.Project{}, credential.Credential{}, &problem{
+			code: "CONSOLE_WRITER", exit: exitFailure,
+			message: "this project is console-first; repository deploys are disabled",
+		}
 	}
 	access, err := r.access(ctx, scope, false)
 	if err != nil {
@@ -903,15 +1055,18 @@ func (r *runner) access(ctx context.Context, scope string, loginWhenMissing bool
 	if errors.Is(err, credential.ErrNotFound) && loginWhenMissing {
 		value, err = r.interactiveLogin(ctx, 5*time.Minute)
 	}
+	if errors.Is(err, credential.ErrNotFound) {
+		return credential.Credential{}, loginRequired("AUTHENTICATION_REQUIRED", "no session is stored for "+profile+"; run oe login, or set OE_ACCESS_TOKEN", err)
+	}
 	if err != nil {
-		return credential.Credential{}, fmt.Errorf("login required: run oe login: %w", err)
+		return credential.Credential{}, err
 	}
 	if value.Source != "environment" && value.RefreshToken != "" && credentialNeedsRefresh(value, r.now()) {
 		refreshed, refreshErr := r.api.RefreshAuthorization(ctx, value.RefreshToken)
 		if refreshErr != nil {
 			if errors.Is(refreshErr, control.ErrSessionExpired) {
 				_ = r.store.Delete(profile)
-				return credential.Credential{}, errors.New("the WorkOS session expired; run oe login again")
+				return credential.Credential{}, loginRequired("SESSION_EXPIRED", "the WorkOS session expired; run oe login again", refreshErr)
 			}
 			if !credentialIsCurrentlyValid(value, r.now()) {
 				return credential.Credential{}, fmt.Errorf("refresh the WorkOS session: %w", refreshErr)
@@ -927,7 +1082,7 @@ func (r *runner) access(ctx context.Context, scope string, loginWhenMissing bool
 		}
 	}
 	if err := credential.RequireScope(value, scope); err != nil {
-		return credential.Credential{}, err
+		return credential.Credential{}, &problem{code: "SCOPE_REQUIRED", message: err.Error(), exit: exitFailure, cause: err}
 	}
 	return value, nil
 }
@@ -945,10 +1100,16 @@ func credentialIsCurrentlyValid(value credential.Credential, now time.Time) bool
 func (r *runner) loadConfig() (string, config.Config, error) {
 	path, err := config.Find(r.directory)
 	if err != nil {
-		return "", config.Config{}, fmt.Errorf("run oe init first: %w", err)
+		return "", config.Config{}, &problem{
+			code: "CONFIG_NOT_FOUND", exit: exitFailure, next: "oe init", cause: err,
+			message: err.Error() + " in " + r.directory + " or a parent directory",
+		}
 	}
 	value, err := config.Load(path)
-	return path, value, err
+	if err != nil {
+		return "", config.Config{}, &problem{code: "CONFIG_INVALID", message: err.Error(), exit: exitFailure, cause: err}
+	}
+	return path, value, nil
 }
 
 type globalOptions struct {
@@ -958,40 +1119,62 @@ type globalOptions struct {
 	environmentExplicit bool
 }
 
+// parseGlobal reads the global flags before or after the command, up to a
+// "--" terminator. The first other word is the command, and the remaining
+// arguments go to the command in their order. A failure still returns the
+// output mode, so the caller can report the failure in that mode.
 func parseGlobal(args []string) (globalOptions, string, []string, error) {
 	options := globalOptions{mode: output.Text, controlURL: defaultControlURL}
-	for len(args) > 0 {
-		switch args[0] {
-		case "--json":
+	command := ""
+	var rest []string
+	var failure error
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if argument == "--" {
+			remaining := args[index+1:]
+			if command == "" && len(remaining) > 0 {
+				command, remaining = remaining[0], remaining[1:]
+			}
+			rest = append(rest, remaining...)
+			break
+		}
+		name, value, inline := strings.Cut(argument, "=")
+		switch {
+		case argument == "--json":
 			options.mode = output.JSON
-			args = args[1:]
-		case "--json-stream":
+		case argument == "--json-stream":
 			options.mode = output.JSONStream
-			args = args[1:]
-		case "--control-url":
-			if len(args) < 2 {
-				return options, "", nil, errors.New("--control-url needs a value")
+		case name == "--control-url" || name == "--environment":
+			if !inline {
+				if index+1 == len(args) {
+					failure = cmp.Or(failure, usageError(command, name+" needs a value"))
+					continue
+				}
+				index++
+				value = args[index]
 			}
-			options.controlURL = args[1]
-			args = args[2:]
-		case "--environment":
-			if len(args) < 2 {
-				return options, "", nil, errors.New("--environment needs a value")
+			if name == "--control-url" {
+				options.controlURL = value
+			} else {
+				options.environment = value
+				options.environmentExplicit = true
 			}
-			options.environment = args[1]
-			options.environmentExplicit = true
-			args = args[2:]
+		case command != "":
+			rest = append(rest, argument)
+		case argument == "-h" || argument == "--help":
+			command = "help"
+		case argument == "--version":
+			command = "version"
+		case strings.HasPrefix(argument, "-"):
+			failure = cmp.Or(failure, usageError("", fmt.Sprintf("unknown global flag %q", argument)))
 		default:
-			if strings.HasPrefix(args[0], "-") && args[0] != "--help" && args[0] != "--version" {
-				return options, "", nil, fmt.Errorf("unknown global flag %q", args[0])
-			}
-			if options.environmentExplicit && options.environment != "sandbox" && options.environment != "production" {
-				return options, "", nil, errors.New("--environment must be sandbox or production")
-			}
-			return options, args[0], args[1:], nil
+			command = argument
 		}
 	}
-	return options, "", nil, nil
+	if failure == nil && options.environmentExplicit && options.environment != "sandbox" && options.environment != "production" {
+		failure = usageError(command, "--environment must be sandbox or production")
+	}
+	return options, command, rest, failure
 }
 
 func defaultEnvironment(command, directory string) string {
@@ -1005,7 +1188,7 @@ func defaultEnvironment(command, directory string) string {
 	if err == nil {
 		value, loadErr := config.Load(path)
 		if loadErr == nil {
-			return value.SelectedEnvironment
+			return cmp.Or(value.SelectedEnvironment, "sandbox")
 		}
 	}
 	return "sandbox"
@@ -1024,6 +1207,37 @@ func newFlags(name string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	return flags
+}
+
+// parseFlags parses the flags of command and refuses a positional argument.
+func parseFlags(flags *flag.FlagSet, command string, args []string) error {
+	if err := parseArguments(flags, command, args); err != nil {
+		return err
+	}
+	if flags.NArg() > 0 {
+		return usageError(command, fmt.Sprintf("oe %s: unexpected argument %q", flags.Name(), flags.Arg(0)))
+	}
+	return nil
+}
+
+// parseArguments parses the flags of command and keeps its positional
+// arguments in flags.Args.
+func parseArguments(flags *flag.FlagSet, command string, args []string) error {
+	if err := flags.Parse(args); err != nil {
+		return usageError(command, "oe "+flags.Name()+": "+err.Error())
+	}
+	return nil
+}
+
+// isTerminal reports whether in is a character device, so a person can answer
+// a prompt on it.
+func isTerminal(in io.Reader) bool {
+	file, ok := in.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func validateControlURL(raw string) error {
@@ -1131,6 +1345,11 @@ func writeRelayEnvironment(directory, filename, relayURL string) error {
 	if err := writePublicFile(path, []byte(strings.Join(output, "\n")+"\n")); err != nil {
 		return err
 	}
+	return ensureIgnored(directory, filename)
+}
+
+// ensureIgnored adds filename to the .gitignore file in directory once.
+func ensureIgnored(directory, filename string) error {
 	ignorePath := filepath.Join(directory, ".gitignore")
 	ignored, err := os.ReadFile(ignorePath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -1179,13 +1398,6 @@ func mustConfigPath(start string) string {
 		return filepath.Join(start, config.Filename)
 	}
 	return path
-}
-
-func defaultWriter(candidate, fallback io.Writer) io.Writer {
-	if candidate != nil {
-		return candidate
-	}
-	return fallback
 }
 
 var Version = "0.0.0-development"

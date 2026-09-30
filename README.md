@@ -30,20 +30,88 @@ round trip.
 ## Command contract
 
 ```text
-oe init       initialize public policy and the local encrypted example
-oe login      use browser authorization and store the result in the OS keychain
-oe sandbox    create the Sandbox environment, install its Relay connection, and wait for acknowledgement
-oe plan       show the production configuration change without applying it
-oe deploy     complete the production card gate, deploy, and install its Relay connection
-oe doctor     check project, environment, connection, credentials, and control-plane health
-oe project    inspect or select a project
-oe notifications stage and verify best-effort notification profiles
+oe init                 initialize public policy and the local encrypted example
+oe login                use browser authorization and store the result in the OS keychain
+oe logout               remove the stored session
+oe sandbox              create the Sandbox environment, install its Relay connection, and wait for acknowledgement
+oe plan                 show the production configuration change without applying it
+oe deploy               complete the production card gate, deploy, and install its Relay connection
+oe doctor               check project, environment, connection, credentials, and control-plane health
+oe project show         read a project and the state of each environment
+oe project connection   print the Relay connection URL of one environment
+oe project select       select another project
+oe notifications        stage and verify best-effort notification profiles
+oe help [COMMAND]       show every command, or the usage of one command
 ```
 
-Global `--json` emits one final JSON document. `--json-stream` emits
-newline-delimited progress and final events. `--environment` is an advanced
-override. Normal work uses sandbox for `oe sandbox`. It uses production for
-`oe plan` and `oe deploy`.
+`oe help` lists each command with its usage, the global flags, the exit codes,
+and the environment variables. `oe help --json` returns the same surface as
+data. `oe COMMAND --help` shows one command.
+
+Global flags can come before or after the command. Global `--json` emits one
+final JSON document. `--json-stream` emits newline-delimited progress and final
+events. `--environment` is an advanced override. Normal work uses sandbox for
+`oe sandbox`. It uses production for `oe plan` and `oe deploy`.
+
+## Use from a coding agent
+
+A coding agent can do each task in this section with `oe` and no console page.
+
+Install the command without a prompt:
+
+```bash
+npm install --global @open-e2ee/cli
+oe --json version
+```
+
+Use `--json` for each command. Each run writes exactly one JSON document to
+stdout, for success and for failure:
+
+```json
+{"status":"ok","command":"project","message":"...","data":{}}
+{"status":"error","command":"plan","error":"...","code":"CONFIG_NOT_FOUND","next":"oe init"}
+```
+
+Switch on `code`, not on the text of `error`. When `next` is present, it is the
+command that moves the task forward. In text mode, a failure goes to stderr as
+`error:` and `next:` lines, and stdout stays clean.
+
+| Exit code | Meaning                                                                               |
+| --------- | ------------------------------------------------------------------------------------- |
+| 0         | The command succeeded.                                                                |
+| 1         | The command failed. `code` tells why.                                                 |
+| 2         | The command line is invalid, or a required input is missing, for example `--confirm`. |
+| 4         | Authentication is required. Run `oe login`.                                           |
+
+Log in once. A person must approve the login in a browser, so start the command
+in the background and give the person the URL and code:
+
+```bash
+oe login --json-stream
+```
+
+The first event has `data.verificationUrl` and `data.userCode`. With `--json`,
+the same prompt goes to stderr. Protected CI uses a scoped `OE_ACCESS_TOKEN`
+instead of a login.
+
+Read the Relay connection URL of a project. Text mode prints only the URL, so a
+shell can capture it:
+
+```bash
+oe project connection --environment sandbox
+oe project connection my-chat --environment production --json
+```
+
+The value is the `OPEN_E2EE_RELAY_URL` setting of the application. A project
+with no active environment fails with `ENVIRONMENT_NOT_ACTIVE`, and `next` names
+`oe sandbox` or `oe deploy`.
+
+A production deploy never waits for an answer that no person can give. Without
+a terminal, and in JSON and CI modes, `oe deploy` stops with
+`CONFIRMATION_REQUIRED` and returns the plan in `data`. Review the changes, then
+run `oe deploy --confirm`. When billing setup is incomplete, the deploy stops
+with `BILLING_SETUP_REQUIRED`, and `data.billingSetupUrl` is the page a person
+must finish.
 
 ## Configuration ownership
 

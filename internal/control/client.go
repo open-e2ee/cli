@@ -2,6 +2,7 @@ package control
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -23,6 +24,7 @@ type Client struct {
 type apiError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Error   string `json:"error"`
 }
 
 type authConfiguration struct {
@@ -362,8 +364,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, credential Cre
 		if err == nil {
 			return nil
 		}
-		var statusError *statusError
-		if attempt < 2 && retryable && errors.As(err, &statusError) && statusError.retryable {
+		if apiError, ok := errors.AsType[*APIError](err); attempt < 2 && retryable && ok && apiError.retryable() {
 			continue
 		}
 		return sanitizeCredentialError(err, credential.AccessToken)
@@ -389,27 +390,30 @@ type sanitizedError struct {
 func (e *sanitizedError) Error() string { return e.message }
 func (e *sanitizedError) Unwrap() error { return e.cause }
 
-type statusError struct {
-	status    int
-	message   string
-	retryable bool
+// APIError is a control API refusal. Code is the stable value a caller
+// switches on; the console omits it for some refusals.
+type APIError struct {
+	Status  int
+	Code    string
+	Message string
 }
 
-func (e *statusError) Error() string { return e.message }
+func (e *APIError) Error() string { return e.Message }
+
+func (e *APIError) retryable() bool {
+	return e.Status == http.StatusTooManyRequests || e.Status >= 500
+}
 
 func decodeResponse(response *http.Response, output any) error {
 	limited := io.LimitReader(response.Body, 1<<20)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		var problem apiError
 		_ = json.NewDecoder(limited).Decode(&problem)
-		message := strings.TrimSpace(problem.Message)
+		message := strings.TrimSpace(cmp.Or(problem.Message, problem.Error))
 		if message == "" {
 			message = http.StatusText(response.StatusCode)
 		}
-		if problem.Code != "" {
-			message = problem.Code + ": " + message
-		}
-		return &statusError{status: response.StatusCode, message: message, retryable: response.StatusCode == 429 || response.StatusCode >= 500}
+		return &APIError{Status: response.StatusCode, Code: problem.Code, Message: message}
 	}
 	if output == nil || response.StatusCode == http.StatusNoContent {
 		_, _ = io.Copy(io.Discard, limited)

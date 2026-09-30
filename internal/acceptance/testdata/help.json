@@ -1,17 +1,128 @@
 {
   "status": "ok",
   "command": "help",
-  "message": "Use oe <command> --help for command details.",
+  "message": "The data field describes every command. Run oe help <command> for one command.",
   "data": {
     "commands": [
-      "init",
-      "login",
-      "sandbox",
-      "deploy",
-      "plan",
-      "doctor",
-      "project",
-      "notifications"
+      {
+        "name": "init",
+        "summary": "Write open-e2ee.jsonc and an in-memory example script. Needs no login.",
+        "usage": ["oe init [--directory PATH] [--name PROJECT] [--force]"]
+      },
+      {
+        "name": "login",
+        "summary": "Authorize this machine in a browser and store the session in the OS keychain.",
+        "usage": ["oe login [--timeout DURATION]"]
+      },
+      {
+        "name": "logout",
+        "summary": "Remove the stored session for the control API.",
+        "usage": ["oe logout"]
+      },
+      {
+        "name": "sandbox",
+        "summary": "Create or update the Sandbox environment, write its Relay connection to .env.local, and wait for the first acknowledged message.",
+        "usage": ["oe sandbox [--timeout DURATION] [--no-wait]"]
+      },
+      {
+        "name": "plan",
+        "summary": "Show the Relay policy changes that a deploy applies, without a change.",
+        "usage": ["oe plan [--environment sandbox|production]"]
+      },
+      {
+        "name": "deploy",
+        "summary": "Deploy Relay policy to Production and write its Relay connection to .env.production.local.",
+        "usage": ["oe deploy [--confirm]"]
+      },
+      {
+        "name": "doctor",
+        "summary": "Check the config, session, project, and Relay connection of the selected environment.",
+        "usage": ["oe doctor [--environment sandbox|production]"]
+      },
+      {
+        "name": "project",
+        "summary": "Read the Relay project, print a Relay connection URL, or select another project.",
+        "usage": [
+          "oe project show [PROJECT]",
+          "oe project connection [PROJECT] [--environment sandbox|production]",
+          "oe project select PROJECT"
+        ]
+      },
+      {
+        "name": "notifications",
+        "summary": "Stage and verify best-effort iOS notification profiles.",
+        "usage": [
+          "oe notifications status",
+          "oe notifications setup ios [--profile background-only|visible-alert]",
+          "oe notifications add-nse",
+          "oe notifications verify ios [--app-bundle PATH]",
+          "oe notifications apple-filtering-request"
+        ]
+      },
+      {
+        "name": "version",
+        "summary": "Print the CLI version.",
+        "usage": ["oe version"]
+      },
+      {
+        "name": "help",
+        "summary": "Show all commands, or the usage of one command.",
+        "usage": ["oe help [COMMAND]"]
+      }
+    ],
+    "environmentVariables": [
+      {
+        "name": "OE_ACCESS_TOKEN",
+        "summary": "A scoped CI credential. The CLI keeps it in memory and never stores it."
+      },
+      {
+        "name": "OE_ACCESS_TOKEN_SCOPES",
+        "summary": "The scopes of OE_ACCESS_TOKEN, separated by commas or spaces."
+      },
+      {
+        "name": "OE_OPERATION_ID",
+        "summary": "The idempotency key for each remote mutation of one run. Set it only to retry one mutation."
+      }
+    ],
+    "exitCodes": [
+      {
+        "code": 0,
+        "meaning": "The command succeeded."
+      },
+      {
+        "code": 1,
+        "meaning": "The command failed. The error and its code tell why."
+      },
+      {
+        "code": 2,
+        "meaning": "The command line is invalid or a required input is missing."
+      },
+      {
+        "code": 4,
+        "meaning": "Authentication is required. Run oe login."
+      }
+    ],
+    "globalFlags": [
+      {
+        "name": "--json",
+        "summary": "Write exactly one JSON document to stdout, for success and for failure."
+      },
+      {
+        "name": "--json-stream",
+        "summary": "Write newline-delimited JSON progress events, then one final event, to stdout."
+      },
+      {
+        "name": "--environment sandbox|production",
+        "summary": "Select the environment. The default is the command's own environment, then selectedEnvironment in open-e2ee.jsonc, then sandbox."
+      },
+      {
+        "name": "--control-url URL",
+        "summary": "Use another control API. It must use HTTPS except on loopback."
+      },
+      {
+        "name": "-h, --help",
+        "summary": "Show help."
+      }
     ]
   }
 }
