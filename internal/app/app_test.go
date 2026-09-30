@@ -33,10 +33,10 @@ func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 			return control.Token{AccessToken: "browser-secret"}, nil
 		},
 	}
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	var opened string
 	exit := Run(context.Background(), []string{"--json", "login"}, Dependencies{
-		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: t.TempDir(),
+		API: api, Store: store, Out: &stdout, Err: &stderr, WorkingDir: t.TempDir(),
 		OpenURL: func(target string) error { opened = target; return nil },
 		Sleep:   func(context.Context, time.Duration) error { return nil },
 	})
@@ -46,8 +46,14 @@ func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 	if opened != "https://login.example/device" {
 		t.Fatalf("browser did not open: %q", opened)
 	}
-	if strings.Contains(stdout.String(), "browser-secret") {
+	if strings.Contains(stdout.String(), "browser-secret") || strings.Contains(stderr.String(), "browser-secret") {
 		t.Fatal("login output exposed the access token")
+	}
+	if !strings.Contains(stderr.String(), "Open https://login.example/device and enter code ABCD.") {
+		t.Fatalf("JSON login hid the prompt from the person who approves it: %q", stderr.String())
+	}
+	if event := decodeEvent(t, stdout.Bytes()); event.Status != "ok" {
+		t.Fatalf("JSON login did not end in one success document: %s", stdout.String())
 	}
 	profile, err := credential.Profile(defaultControlURL)
 	if err != nil {
@@ -131,8 +137,12 @@ func TestDeployRequiresBillingAndExplicitJSONConfirmation(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	exit := Run(context.Background(), []string{"--json", "deploy"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit == 0 || deployed {
+	if exit != exitUsage || deployed {
 		t.Fatalf("JSON deploy did not require --confirm: deployed=%v output=%s", deployed, stdout.String())
+	}
+	refusal := decodeEvent(t, stdout.Bytes())
+	if refusal.Code != "CONFIRMATION_REQUIRED" || refusal.Next != "oe deploy --confirm" || refusal.Data["planId"] != "plan-1" {
+		t.Fatalf("confirmation refusal did not name the plan and the next command: %s", stdout.String())
 	}
 	stdout.Reset()
 	exit = Run(context.Background(), []string{"--json", "deploy", "--confirm"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
@@ -259,6 +269,10 @@ func TestDeployOpensCardSetupBeforeProductionMutation(t *testing.T) {
 	})
 	if exit == 0 || opened != "https://billing.example/setup" {
 		t.Fatalf("card setup gate did not stop deploy: opened=%q output=%s", opened, stdout.String())
+	}
+	event := decodeEvent(t, stdout.Bytes())
+	if event.Code != "BILLING_SETUP_REQUIRED" || event.Data["billingSetupUrl"] != "https://billing.example/setup" || event.Next != "oe deploy" {
+		t.Fatalf("card setup gate did not hand the setup URL to the caller: %s", stdout.String())
 	}
 }
 
@@ -464,8 +478,8 @@ func TestTerminalRefreshRemovesTheExpiredSession(t *testing.T) {
 		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{},
 		WorkingDir: directory, Now: func() time.Time { return now },
 	})
-	if exit == 0 || !strings.Contains(stdout.String(), "run oe login again") {
-		t.Fatalf("terminal refresh did not require login: %s", stdout.String())
+	if event := decodeEvent(t, stdout.Bytes()); exit != exitAuthentication || event.Code != "SESSION_EXPIRED" || event.Next != "oe login" {
+		t.Fatalf("terminal refresh did not require login: exit=%d output=%s", exit, stdout.String())
 	}
 	if _, err := store.Get(profile); !errors.Is(err, credential.ErrNotFound) {
 		t.Fatalf("terminal session remained stored: %v", err)

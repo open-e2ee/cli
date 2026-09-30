@@ -1,0 +1,70 @@
+package app
+
+import (
+	"cmp"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+
+	"github.com/open-e2ee/cli/internal/control"
+	"github.com/open-e2ee/cli/internal/output"
+)
+
+// problem is a command failure with a stable code, the exit status that the
+// code implies, and the command that moves the caller forward.
+type problem struct {
+	code    string
+	message string
+	next    string
+	exit    int
+	data    map[string]any
+	cause   error
+}
+
+func (p *problem) Error() string { return p.message }
+func (p *problem) Unwrap() error { return p.cause }
+
+func usageError(command, message string) error {
+	next := "oe help"
+	if _, ok := lookupCommand(command); ok {
+		next += " " + command
+	}
+	return &problem{code: "USAGE_ERROR", message: message, next: next, exit: exitUsage}
+}
+
+func unknownCommand(name string) error {
+	return &problem{code: "USAGE_ERROR", message: fmt.Sprintf("unknown command %q", name), next: "oe help", exit: exitUsage}
+}
+
+func loginRequired(code, message string, cause error) error {
+	return &problem{code: code, message: message, next: "oe login", exit: exitAuthentication, cause: cause}
+}
+
+// classify gives every error that reaches Run a code and an exit status. A
+// control API refusal keeps the code that the console sent.
+func classify(err error) *problem {
+	if known, ok := errors.AsType[*problem](err); ok {
+		return known
+	}
+	if refusal, ok := errors.AsType[*control.APIError](err); ok {
+		result := &problem{code: cmp.Or(refusal.Code, "CONTROL_ERROR"), message: err.Error(), exit: exitFailure, cause: err}
+		switch {
+		case refusal.Status == http.StatusUnauthorized || refusal.Code == "AUTHENTICATION_REQUIRED" || refusal.Code == "INVALID_SESSION":
+			result.code = cmp.Or(refusal.Code, "AUTHENTICATION_REQUIRED")
+			result.next = "oe login"
+			result.exit = exitAuthentication
+		case refusal.Code == "ORGANIZATION_REQUIRED":
+			result.next = "oe login"
+		}
+		return result
+	}
+	if _, ok := errors.AsType[*url.Error](err); ok {
+		return &problem{code: "CONTROL_UNAVAILABLE", message: err.Error(), exit: exitFailure, cause: err}
+	}
+	return &problem{code: "COMMAND_FAILED", message: err.Error(), exit: exitFailure, cause: err}
+}
+
+func (p *problem) output() output.Problem {
+	return output.Problem{Message: p.message, Code: p.code, Next: p.next, Data: p.data}
+}

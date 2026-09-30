@@ -8,6 +8,10 @@ import (
 	"github.com/gofrs/flock"
 )
 
+// Filename is the advisory lock file in the project directory. It is local
+// state and never belongs in version control.
+const Filename = ".open-e2ee.lock"
+
 type Lock struct {
 	file *flock.Flock
 }
@@ -18,7 +22,7 @@ func Acquire(ctx context.Context, directory string) (*Lock, error) {
 		return nil, ctx.Err()
 	default:
 	}
-	file := flock.New(filepath.Join(directory, ".open-e2ee.lock"))
+	file := flock.New(filepath.Join(directory, Filename))
 	locked, err := file.TryLock()
 	if err != nil {
 		return nil, fmt.Errorf("lock project: %w", err)
