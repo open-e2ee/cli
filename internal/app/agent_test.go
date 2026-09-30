@@ -149,7 +149,7 @@ func TestControlRefusalKeepsTheConsoleCode(t *testing.T) {
 	}{
 		{&control.APIError{Status: 401, Code: "INVALID_SESSION", Message: "Run oe login again."}, exitAuthentication, "oe login"},
 		{&control.APIError{Status: 404, Code: "PROJECT_NOT_FOUND", Message: "Relay project not found."}, exitFailure, ""},
-		{&control.APIError{Status: 502, Message: "Bad Gateway"}, exitFailure, ""},
+		{&control.APIError{Status: 500, Message: "Internal Server Error"}, exitFailure, ""},
 	} {
 		api := &fakeAPI{getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
 			return control.Project{}, test.refusal

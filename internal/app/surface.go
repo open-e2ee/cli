@@ -34,6 +34,8 @@ const (
 	exitFailure        = 1
 	exitUsage          = 2
 	exitAuthentication = 4
+	exitPersonAction   = 5
+	exitTemporary      = 6
 )
 
 var commandSurface = []commandSpec{
@@ -91,6 +93,8 @@ var exitCodeSurface = []exitCodeSpec{
 	{exitFailure, "The command failed. The error and its code tell why."},
 	{exitUsage, "The command line is invalid or a required input is missing."},
 	{exitAuthentication, "Authentication is required. Run oe login."},
+	{exitPersonAction, "A person must act before the command can continue. The error tells what to do. When action.url is present, it is the page that the person opens."},
+	{exitTemporary, "The failure is temporary. It is safe to run the same command again later. next is that command."},
 }
 
 var variableSurface = []variableSpec{
