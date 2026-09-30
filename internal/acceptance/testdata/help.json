@@ -120,6 +120,10 @@
         "summary": "Write newline-delimited JSON progress events, then one final event, to stdout."
       },
       {
+        "name": "--agent yes|no|auto",
+        "summary": "Say whether a coding agent runs oe. The default, auto, reads the environment variables that coding agents set. Under an agent, the default output is JSON, and oe never prompts and never opens a browser. --agent no restores text output."
+      },
+      {
         "name": "--environment sandbox|production",
         "summary": "Select the environment. The default is the command's own environment, then selectedEnvironment in open-e2ee.jsonc, then sandbox."
       },

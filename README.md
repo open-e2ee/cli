@@ -50,7 +50,8 @@ data. `oe COMMAND --help` shows one command.
 
 Global flags can come before or after the command. Global `--json` emits one
 final JSON document. `--json-stream` emits newline-delimited progress and final
-events. `--environment` is an advanced override. Normal work uses sandbox for
+events. `--agent yes|no|auto` says whether a coding agent runs `oe`.
+`--environment` is an advanced override. Normal work uses sandbox for
 `oe sandbox`. It uses production for `oe plan` and `oe deploy`.
 
 ## Use from a coding agent
@@ -64,8 +65,12 @@ npm install --global @open-e2ee/cli
 oe --json version
 ```
 
-Use `--json` for each command. Each run writes exactly one JSON document to
-stdout, for success and for failure:
+`oe` detects a coding agent from the environment variables that the agent sets,
+for example `CLAUDECODE` or `CODEX_THREAD_ID`. Under an agent, the default
+output is JSON, and `oe` never prompts and never opens a browser. Pass
+`--agent yes` for an agent that `oe` does not detect. `--agent no` restores
+text output. In JSON mode, each run writes exactly one JSON document to stdout,
+for success and for failure:
 
 ```json
 {"status":"ok","command":"project","message":"...","data":{}}
@@ -86,8 +91,9 @@ goes to stderr as `error:`, `action:`, and `next:` lines, and stdout stays clean
 | 5         | A person must act. `error` tells what to do. When `action.url` is present, it is the page to open. |
 | 6         | The failure is temporary. `next` is the same command. Run it again later.                          |
 
-Log in once. A person must approve the login in a browser, so start the command
-in the background and give the person the URL and code:
+Log in once. A person must approve the login in a browser. Under an agent, `oe`
+does not open the browser, so start the command in the background and give the
+person the URL and code:
 
 ```bash
 oe login --json-stream
@@ -111,11 +117,11 @@ environment fails with `ENVIRONMENT_NOT_ACTIVE`, and `next` names
 `oe sandbox` or `oe deploy`.
 
 A production deploy never waits for an answer that no person can give. Without
-a terminal, and in JSON and CI modes, `oe deploy` stops with
+a terminal, under an agent, and in JSON and CI modes, `oe deploy` stops with
 `CONFIRMATION_REQUIRED` and returns the plan in `data`. Review the changes, then
 run `oe deploy --confirm`. When billing setup is incomplete, the deploy stops
-with `BILLING_SETUP_REQUIRED`, and `data.billingSetupUrl` is the page a person
-must finish.
+with `BILLING_SETUP_REQUIRED`, and `action.url` is the page a person must
+finish. `oe` opens that page in a browser only for a person at a terminal.
 
 ## Configuration ownership
 

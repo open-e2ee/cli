@@ -38,8 +38,9 @@ func TestLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 	var opened string
 	exit := Run(context.Background(), []string{"--json", "login"}, Dependencies{
 		API: api, Store: store, Out: &stdout, Err: &stderr, WorkingDir: t.TempDir(),
-		OpenURL: func(target string) error { opened = target; return nil },
-		Sleep:   func(context.Context, time.Duration) error { return nil },
+		Interactive: func() bool { return true },
+		OpenURL:     func(target string) error { opened = target; return nil },
+		Sleep:       func(context.Context, time.Duration) error { return nil },
 	})
 	if exit != 0 {
 		t.Fatalf("login failed: %s", stdout.String())
@@ -344,7 +345,8 @@ func TestDeployOpensCardSetupBeforeProductionMutation(t *testing.T) {
 	var stdout bytes.Buffer
 	exit := Run(context.Background(), []string{"--json", "deploy", "--confirm"}, Dependencies{
 		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
-		OpenURL: func(target string) error { opened = target; return nil },
+		Interactive: func() bool { return true },
+		OpenURL:     func(target string) error { opened = target; return nil },
 	})
 	if exit == 0 || opened != "https://billing.example/setup" {
 		t.Fatalf("card setup gate did not stop deploy: opened=%q output=%s", opened, stdout.String())
