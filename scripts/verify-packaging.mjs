@@ -4,14 +4,14 @@ import path from "node:path";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const required = [
-  "packages/cli/package.json",
+  "packages/oe/package.json",
   "packages/create-oe/package.json",
-  "packages/cli-darwin-arm64/package.json",
-  "packages/cli-darwin-x64/package.json",
-  "packages/cli-linux-arm64/package.json",
-  "packages/cli-linux-x64/package.json",
-  "packages/cli-win32-arm64/package.json",
-  "packages/cli-win32-x64/package.json",
+  "packages/oe-darwin-arm64/package.json",
+  "packages/oe-darwin-x64/package.json",
+  "packages/oe-linux-arm64/package.json",
+  "packages/oe-linux-x64/package.json",
+  "packages/oe-win32-arm64/package.json",
+  "packages/oe-win32-x64/package.json",
   "Formula/oe.rb",
   ".github/workflows/release.yml",
   "scripts/test-native-install.mjs",
@@ -23,7 +23,7 @@ for (const relative of required) {
 }
 
 const cli = JSON.parse(
-  await readFile(path.join(root, "packages/cli/package.json"), "utf8"),
+  await readFile(path.join(root, "packages/oe/package.json"), "utf8"),
 );
 const workspace = JSON.parse(
   await readFile(path.join(root, "package.json"), "utf8"),
@@ -32,14 +32,14 @@ const initializer = JSON.parse(
   await readFile(path.join(root, "packages/create-oe/package.json"), "utf8"),
 );
 const packageNames = [
-  "cli",
+  "oe",
   "create-oe",
-  "cli-darwin-arm64",
-  "cli-darwin-x64",
-  "cli-linux-arm64",
-  "cli-linux-x64",
-  "cli-win32-arm64",
-  "cli-win32-x64",
+  "oe-darwin-arm64",
+  "oe-darwin-x64",
+  "oe-linux-arm64",
+  "oe-linux-x64",
+  "oe-win32-arm64",
+  "oe-win32-x64",
 ];
 for (const packageName of packageNames) {
   const manifest = JSON.parse(
@@ -54,7 +54,7 @@ for (const packageName of packageNames) {
     );
   }
 }
-if (initializer.dependencies?.["@open-e2ee/cli"] !== workspace.version) {
+if (initializer.dependencies?.["@open-e2ee/oe"] !== workspace.version) {
   throw new Error("create-oe must depend on the exact coordinated CLI version");
 }
 const sdkVersion =
@@ -68,16 +68,16 @@ if (
   );
 }
 if (cli.scripts?.postinstall) {
-  throw new Error("@open-e2ee/cli must not use a postinstall download");
+  throw new Error("@open-e2ee/oe must not use a postinstall download");
 }
 if (Object.keys(cli.optionalDependencies ?? {}).length !== 6) {
   throw new Error(
-    "@open-e2ee/cli must declare all six optional platform packages",
+    "@open-e2ee/oe must declare all six optional platform packages",
   );
 }
 
 const launcher = await readFile(
-  path.join(root, "packages/cli/bin/oe.js"),
+  path.join(root, "packages/oe/bin/oe.js"),
   "utf8",
 );
 if (/\bfetch\s*\(|https?:\/\//.test(launcher)) {

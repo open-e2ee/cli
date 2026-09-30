@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/open-e2ee/cli/internal/control"
-	"github.com/open-e2ee/cli/internal/output"
+	"github.com/open-e2ee/oe/internal/control"
+	"github.com/open-e2ee/oe/internal/output"
 )
 
 // problem is a command failure with a stable code, the exit status that the

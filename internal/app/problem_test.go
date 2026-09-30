@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-e2ee/cli/internal/control"
-	"github.com/open-e2ee/cli/internal/credential"
-	"github.com/open-e2ee/cli/internal/output"
+	"github.com/open-e2ee/oe/internal/control"
+	"github.com/open-e2ee/oe/internal/credential"
+	"github.com/open-e2ee/oe/internal/output"
 )
 
 // The exit statuses in these tests are literals: a script switches on the

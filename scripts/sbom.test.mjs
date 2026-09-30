@@ -73,7 +73,7 @@ function createFixture() {
     ({ Path: name, Version: version }) => ({ name, version }),
   );
   modules.push({ name: "std", version: goValue(["env", "GOVERSION"]) });
-  const mainRef = "pkg:golang/github.com/open-e2ee/cli@v1.0.0?type=module";
+  const mainRef = "pkg:golang/github.com/open-e2ee/oe@v1.0.0?type=module";
   const components = modules.map(({ name, version }) => ({
     "bom-ref": `pkg:golang/${name}@${version}?type=module`,
     type: "library",
@@ -94,9 +94,9 @@ function createFixture() {
       component: {
         "bom-ref": mainRef,
         type: "application",
-        name: "github.com/open-e2ee/cli",
+        name: "github.com/open-e2ee/oe",
         version: "v1.0.0",
-        purl: "pkg:golang/github.com/open-e2ee/cli@v1.0.0",
+        purl: "pkg:golang/github.com/open-e2ee/oe@v1.0.0",
         evidence: { licenses: [{ license: { id: "Apache-2.0" } }] },
       },
     },

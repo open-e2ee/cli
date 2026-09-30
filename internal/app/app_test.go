@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-e2ee/cli/internal/config"
-	"github.com/open-e2ee/cli/internal/control"
-	"github.com/open-e2ee/cli/internal/credential"
-	"github.com/open-e2ee/cli/internal/envfile"
+	"github.com/open-e2ee/oe/internal/config"
+	"github.com/open-e2ee/oe/internal/control"
+	"github.com/open-e2ee/oe/internal/credential"
+	"github.com/open-e2ee/oe/internal/envfile"
 )
 
 const (

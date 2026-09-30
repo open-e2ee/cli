@@ -28,7 +28,7 @@ const checksums = [];
 for (const [goos, goarch] of targets) {
   const npmArch = goarch === "amd64" ? "x64" : goarch;
   const npmOS = goos === "windows" ? "win32" : goos;
-  const packageName = `cli-${npmOS}-${npmArch}`;
+  const packageName = `oe-${npmOS}-${npmArch}`;
   const executable = goos === "windows" ? "oe.exe" : "oe";
   const binaryDirectory = path.join(output, "npm", packageName, "bin");
   await cp(
@@ -83,7 +83,7 @@ for (const [goos, goarch] of targets) {
   );
 }
 
-for (const packageName of ["cli", "create-oe"]) {
+for (const packageName of ["oe", "create-oe"]) {
   await cp(
     path.join(root, "packages", packageName),
     path.join(output, "npm", packageName),
@@ -108,7 +108,7 @@ async function setPackageVersion(
   if (rewriteDependencies) {
     for (const key of ["dependencies", "optionalDependencies"]) {
       for (const name of Object.keys(value[key] ?? {})) {
-        if (name === "@open-e2ee/cli" || name.startsWith("@open-e2ee/cli-"))
+        if (name === "@open-e2ee/oe" || name.startsWith("@open-e2ee/oe-"))
           value[key][name] = nextVersion;
       }
     }

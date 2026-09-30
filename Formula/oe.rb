@@ -1,10 +1,10 @@
 class Oe < Formula
   desc "Command-line tools for OpenE2EE projects"
-  homepage "https://github.com/open-e2ee/cli"
-  url "https://github.com/open-e2ee/cli/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "5200d8b4b2bddcc1592d51974d5e3dc0cd0c3e5d9bb536ca5be6cc61ee3dfd05"
+  homepage "https://github.com/open-e2ee/oe"
+  url "https://github.com/open-e2ee/oe/archive/refs/tags/v1.0.0.tar.gz"
+  sha256 "0cf10c4cd8974dbd82fb6c477970c5fdd982232432c2e8a43c043ac618235cb9"
   license "Apache-2.0"
-  head "https://github.com/open-e2ee/cli.git", branch: "main"
+  head "https://github.com/open-e2ee/oe.git", branch: "main"
 
   depends_on "go" => :build
 

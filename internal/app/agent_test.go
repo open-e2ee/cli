@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-e2ee/cli/internal/agent"
-	"github.com/open-e2ee/cli/internal/control"
-	"github.com/open-e2ee/cli/internal/credential"
-	"github.com/open-e2ee/cli/internal/projectlock"
+	"github.com/open-e2ee/oe/internal/agent"
+	"github.com/open-e2ee/oe/internal/control"
+	"github.com/open-e2ee/oe/internal/credential"
+	"github.com/open-e2ee/oe/internal/projectlock"
 )
 
 // TestMain removes the variables that coding agents set, so a test that runs

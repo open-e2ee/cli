@@ -72,7 +72,7 @@ jobs:
               npm publish "$package_path" --provenance --access public
             fi
           }
-          for package in dist/npm/cli-darwin-* dist/npm/cli-linux-* dist/npm/cli-win32-*; do
+          for package in dist/npm/oe-darwin-* dist/npm/oe-linux-* dist/npm/oe-win32-*; do
             publish_package "$package"
           done
       - name: Publish command and initializer
@@ -86,5 +86,5 @@ jobs:
               npm publish "$package_path" --provenance --access public
             fi
           }
-          publish_package dist/npm/cli
+          publish_package dist/npm/oe
           publish_package dist/npm/create-oe

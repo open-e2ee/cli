@@ -9,7 +9,7 @@ if (!binary)
   throw new Error("usage: node scripts/test-native-install.mjs <binary>");
 
 const root = path.resolve(import.meta.dirname, "..");
-const platformPackage = `cli-${process.platform}-${process.arch}`;
+const platformPackage = `oe-${process.platform}-${process.arch}`;
 const directory = await mkdtemp(path.join(os.tmpdir(), "oe-native-install-"));
 const npmExecutable = process.env.npm_execpath;
 if (!npmExecutable)
@@ -23,9 +23,9 @@ function runNpm(arguments_, options = {}) {
 }
 
 try {
-  const stagedCLI = path.join(directory, "cli");
+  const stagedCLI = path.join(directory, "oe");
   const stagedPlatform = path.join(directory, platformPackage);
-  await cp(path.join(root, "packages/cli"), stagedCLI, { recursive: true });
+  await cp(path.join(root, "packages/oe"), stagedCLI, { recursive: true });
   await cp(path.join(root, "packages", platformPackage), stagedPlatform, {
     recursive: true,
   });
@@ -59,7 +59,7 @@ try {
   const result = spawnSync(
     process.execPath,
     [
-      path.join(install, "node_modules/@open-e2ee/cli/bin/oe.js"),
+      path.join(install, "node_modules/@open-e2ee/oe/bin/oe.js"),
       "--json",
       "version",
     ],

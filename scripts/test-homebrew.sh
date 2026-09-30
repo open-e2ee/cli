@@ -5,7 +5,7 @@ repository_root=$(cd "$(dirname "$0")/.." && pwd)
 temp_base=${TMPDIR:-/tmp}
 temp_base=${temp_base%/}
 test_root=$(mktemp -d "$temp_base/oe-homebrew.XXXXXX")
-tap_name="open-e2ee/cli-local-$$"
+tap_name="open-e2ee/oe-local-$$"
 
 cleanup() {
   brew uninstall "$tap_name/oe" >/dev/null 2>&1 || true

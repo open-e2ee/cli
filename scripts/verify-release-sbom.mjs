@@ -35,15 +35,15 @@ expect(tool?.version === "v1.10.0", "cyclonedx-gomod must be v1.10.0");
 const main = sbom.metadata?.component;
 expect(main?.type === "application", "main component must be an application");
 expect(
-  main?.name === "github.com/open-e2ee/cli",
-  "main component must be github.com/open-e2ee/cli",
+  main?.name === "github.com/open-e2ee/oe",
+  "main component must be github.com/open-e2ee/oe",
 );
 expect(
   main?.version === `v${releaseVersion}`,
   "main component version must match the release",
 );
 expect(
-  main?.purl === `pkg:golang/github.com/open-e2ee/cli@v${releaseVersion}`,
+  main?.purl === `pkg:golang/github.com/open-e2ee/oe@v${releaseVersion}`,
   "main component must have the exact platform-neutral package URL",
 );
 expect(hasLicense(main, "Apache-2.0"), "main component must report Apache-2.0");

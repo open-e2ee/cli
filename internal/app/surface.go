@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/open-e2ee/cli/internal/output"
+	"github.com/open-e2ee/oe/internal/output"
 )
 
 // commandSpec is one entry of the public command surface. Help text, the JSON

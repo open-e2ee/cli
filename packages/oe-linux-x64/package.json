@@ -1,5 +1,5 @@
 {
-  "name": "@open-e2ee/cli-linux-x64",
+  "name": "@open-e2ee/oe-linux-x64",
   "version": "1.0.0",
   "description": "OpenE2EE CLI for Linux x64",
   "license": "Apache-2.0",
@@ -17,6 +17,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/open-e2ee/cli.git"
+    "url": "git+https://github.com/open-e2ee/oe.git"
   }
 }

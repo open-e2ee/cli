@@ -2,7 +2,7 @@
 
 Do not report a suspected vulnerability in a public issue.
 
-Use GitHub's private vulnerability reporting for `open-e2ee/cli`. Include the
+Use GitHub's private vulnerability reporting for `open-e2ee/oe`. Include the
 affected command and version, the operating system, the expected security
 boundary, and a minimal reproduction when it is safe to provide one. Do not send
 real access tokens, private keys, recovery material, or customer data.

@@ -12,7 +12,7 @@
     "README.md"
   ],
   "dependencies": {
-    "@open-e2ee/cli": "1.0.0",
+    "@open-e2ee/oe": "1.0.0",
     "@open-e2ee/signal-protocol-sdk": "^8.2.0"
   },
   "engines": {
@@ -20,6 +20,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/open-e2ee/cli.git"
+    "url": "git+https://github.com/open-e2ee/oe.git"
   }
 }

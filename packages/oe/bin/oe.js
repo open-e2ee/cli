@@ -4,12 +4,12 @@ import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 
 const platformPackages = {
-  "darwin-arm64": "@open-e2ee/cli-darwin-arm64",
-  "darwin-x64": "@open-e2ee/cli-darwin-x64",
-  "linux-arm64": "@open-e2ee/cli-linux-arm64",
-  "linux-x64": "@open-e2ee/cli-linux-x64",
-  "win32-arm64": "@open-e2ee/cli-win32-arm64",
-  "win32-x64": "@open-e2ee/cli-win32-x64",
+  "darwin-arm64": "@open-e2ee/oe-darwin-arm64",
+  "darwin-x64": "@open-e2ee/oe-darwin-x64",
+  "linux-arm64": "@open-e2ee/oe-linux-arm64",
+  "linux-x64": "@open-e2ee/oe-linux-x64",
+  "win32-arm64": "@open-e2ee/oe-win32-arm64",
+  "win32-x64": "@open-e2ee/oe-win32-x64",
 };
 
 const require = createRequire(import.meta.url);
@@ -30,7 +30,7 @@ try {
     );
 } catch {
   process.stderr.write(
-    `The optional package ${packageName} is missing. Reinstall @open-e2ee/cli with optional dependencies enabled.\n`,
+    `The optional package ${packageName} is missing. Reinstall @open-e2ee/oe with optional dependencies enabled.\n`,
   );
   process.exit(1);
 }
