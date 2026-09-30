@@ -22,6 +22,7 @@ import (
 	"github.com/open-e2ee/cli/internal/config"
 	"github.com/open-e2ee/cli/internal/control"
 	"github.com/open-e2ee/cli/internal/credential"
+	"github.com/open-e2ee/cli/internal/envfile"
 	iosnotifications "github.com/open-e2ee/cli/internal/notifications"
 	"github.com/open-e2ee/cli/internal/output"
 	"github.com/open-e2ee/cli/internal/projectlock"
@@ -354,6 +355,10 @@ func (r *runner) sandbox(ctx context.Context, args []string) error {
 			message: "this project is console-first; change writer mode before oe sandbox can write policy",
 		}
 	}
+	connection, err := envfile.Detect(filepath.Dir(path), "")
+	if err != nil {
+		return err
+	}
 	lock, err := projectlock.Acquire(ctx, filepath.Dir(path))
 	if err != nil {
 		return err
@@ -390,7 +395,7 @@ func (r *runner) sandbox(ctx context.Context, args []string) error {
 	if err := config.Write(path, value); err != nil {
 		return err
 	}
-	if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", bootstrap.SandboxRelayURL); err != nil {
+	if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", connection.Variable, bootstrap.SandboxRelayURL); err != nil {
 		return err
 	}
 	_ = r.out.Progress("sandbox", "The Sandbox environment is ready. Connect the first device.", map[string]any{"environment": "sandbox"})
@@ -463,6 +468,10 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 		return err
 	}
 	configPath := mustConfigPath(r.directory)
+	connection, err := envfile.Detect(filepath.Dir(configPath), "")
+	if err != nil {
+		return err
+	}
 	lock, err := projectlock.Acquire(ctx, filepath.Dir(configPath))
 	if err != nil {
 		return err
@@ -525,12 +534,12 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 	if err := config.Write(configPath, value); err != nil {
 		return err
 	}
-	if err := writeRelayEnvironment(filepath.Dir(configPath), ".env.production.local", deployment.RelayURL); err != nil {
+	if err := writeRelayEnvironment(filepath.Dir(configPath), ".env.production.local", connection.Variable, deployment.RelayURL); err != nil {
 		return err
 	}
-	return r.out.Success("deploy", "Production Relay is active. Install OPEN_E2EE_RELAY_URL from .env.production.local in the hosting environment.", map[string]any{
+	return r.out.Success("deploy", "Production Relay is active. Install "+connection.Variable+" from .env.production.local in the hosting environment.", map[string]any{
 		"configurationFile": ".env.production.local", "deploymentId": deployment.ID,
-		"revision": deployment.Revision, "status": deployment.Status, "variable": "OPEN_E2EE_RELAY_URL",
+		"revision": deployment.Revision, "status": deployment.Status, "variable": connection.Variable,
 	})
 }
 
@@ -643,10 +652,14 @@ func (r *runner) project(ctx context.Context, args []string) error {
 		if relayURL == "" {
 			return environmentNotActive(project.Slug, r.environment)
 		}
+		connection, err := envfile.Detect(filepath.Dir(mustConfigPath(r.directory)), "")
+		if err != nil {
+			return err
+		}
 		// Text mode prints only the URL, so a shell can capture it.
 		return r.out.Success("project", relayURL, map[string]any{
 			"project": project.Slug, "environment": r.environment,
-			"relayUrl": relayURL, "variable": "OPEN_E2EE_RELAY_URL",
+			"relayUrl": relayURL, "variable": connection.Variable,
 		})
 	case "select":
 		flags := newFlags("project select")
@@ -661,6 +674,10 @@ func (r *runner) project(ctx context.Context, args []string) error {
 			return err
 		}
 		project, err := r.readProject(ctx, flags.Arg(0))
+		if err != nil {
+			return err
+		}
+		connection, err := envfile.Detect(filepath.Dir(path), "")
 		if err != nil {
 			return err
 		}
@@ -688,10 +705,10 @@ func (r *runner) project(ctx context.Context, args []string) error {
 		if err := config.Write(path, value); err != nil {
 			return err
 		}
-		if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", sandbox.RelayURL); err != nil {
+		if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", connection.Variable, sandbox.RelayURL); err != nil {
 			return err
 		}
-		if err := writeRelayEnvironment(filepath.Dir(path), ".env.production.local", production.RelayURL); err != nil {
+		if err := writeRelayEnvironment(filepath.Dir(path), ".env.production.local", connection.Variable, production.RelayURL); err != nil {
 			return err
 		}
 		return r.out.Success("project", "Selected project "+project.Slug+".", map[string]any{"project": project.Slug})
@@ -1318,32 +1335,10 @@ func slug(value string) string {
 	return strings.Trim(result.String(), "-")
 }
 
-func writeRelayEnvironment(directory, filename, relayURL string) error {
-	const variable = "OPEN_E2EE_RELAY_URL"
-	const configuredComment = "# Public Signal Protocol Relay connection. This is not a credential."
-	const unconfiguredComment = "# Signal Protocol Relay connection is not configured for this environment."
-	path := filepath.Join(directory, filename)
-	contents, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	lines := strings.Split(strings.TrimRight(string(contents), "\r\n"), "\n")
-	output := make([]string, 0, len(lines)+2)
-	for _, line := range lines {
-		if line == "" && len(output) == 0 {
-			continue
-		}
-		if strings.HasPrefix(line, variable+"=") || line == configuredComment || line == unconfiguredComment {
-			continue
-		}
-		output = append(output, line)
-	}
-	if relayURL == "" {
-		output = append(output, unconfiguredComment)
-	} else {
-		output = append(output, configuredComment, variable+"="+relayURL)
-	}
-	if err := writePublicFile(path, []byte(strings.Join(output, "\n")+"\n")); err != nil {
+// writeRelayEnvironment writes relayURL to filename in the project directory
+// under variable, and keeps the file out of version control.
+func writeRelayEnvironment(directory, filename, variable, relayURL string) error {
+	if err := envfile.Write(filepath.Join(directory, filename), variable, relayURL); err != nil {
 		return err
 	}
 	return ensureIgnored(directory, filename)
