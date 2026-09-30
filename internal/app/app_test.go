@@ -97,6 +97,10 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 			return control.Activation{FirstDevice: true, FirstAcknowledged: true}, nil
 		},
 	}
+	source, err := os.ReadFile(filepath.Join(directory, config.Filename))
+	if err != nil {
+		t.Fatal(err)
+	}
 	var stdout bytes.Buffer
 	exit := Run(context.Background(), []string{"--environment", "sandbox", "--json", "sandbox", "--timeout", "1s"}, Dependencies{
 		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
@@ -105,12 +109,11 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 	if exit != 0 {
 		t.Fatalf("dev failed: %s", stdout.String())
 	}
-	value, err := config.Load(filepath.Join(directory, config.Filename))
-	if err != nil {
-		t.Fatal(err)
+	if after, err := os.ReadFile(filepath.Join(directory, config.Filename)); err != nil || !bytes.Equal(after, source) {
+		t.Fatalf("sandbox changed %s: %q %v", config.Filename, after, err)
 	}
-	if value.Environments["sandbox"].RelayURL != sandboxRelayURL || value.Environments["production"].RelayURL != "" {
-		t.Fatalf("sandbox Relay connection was not written in isolation: %#v", value.Environments)
+	if _, err := os.Stat(filepath.Join(directory, ".env.production.local")); !os.IsNotExist(err) {
+		t.Fatalf("sandbox wrote the production Relay connection: %v", err)
 	}
 	environment, err := os.ReadFile(filepath.Join(directory, ".env.local"))
 	if err != nil || !strings.Contains(string(environment), "OPEN_E2EE_RELAY_URL="+sandboxRelayURL) {
@@ -244,15 +247,7 @@ func TestDeployRequiresBillingAndExplicitJSONConfirmation(t *testing.T) {
 
 func TestDoctorReportsSafeConnectionOriginAndRefusesProjectDrift(t *testing.T) {
 	directory := initializedProject(t, "doctor-chat")
-	path := filepath.Join(directory, config.Filename)
-	value, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sandbox := value.Environments["sandbox"]
-	sandbox.RelayURL = sandboxRelayURL
-	value.Environments["sandbox"] = sandbox
-	if err := config.Write(path, value); err != nil {
+	if err := writeRelayEnvironment(directory, ".env.local", envfile.DefaultVariable, sandboxRelayURL); err != nil {
 		t.Fatal(err)
 	}
 	store := credential.NewMemory()
@@ -363,46 +358,96 @@ func TestDeployOpensCardSetupBeforeProductionMutation(t *testing.T) {
 
 func TestConsoleWriterFailsBeforeRemoteMutation(t *testing.T) {
 	directory := initializedProject(t, "console-chat")
-	path := filepath.Join(directory, config.Filename)
-	value, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
+	store := credential.NewMemory()
+	storeCredential(t, store, "deploy:write")
+	api := &fakeAPI{
+		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
+			return control.Project{Slug: "console-chat", Writer: "console", Production: projectEnvironment(productionRelayURL, "7")}, nil
+		},
+		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
+			t.Fatal("console-first project reached the plan")
+			return control.Plan{}, nil
+		},
+		deploy: func(context.Context, control.CredentialRequest, control.DeployRequest) (control.Deployment, error) {
+			t.Fatal("console-first project reached deploy mutation")
+			return control.Deployment{}, nil
+		},
 	}
-	value.Writer = "console"
-	if err := config.Write(path, value); err != nil {
-		t.Fatal(err)
-	}
-	api := &fakeAPI{bootstrapSandbox: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
-		t.Fatal("console-first project reached bootstrap mutation")
-		return control.Bootstrap{}, nil
-	}}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--environment", "sandbox", "--json", "sandbox"}, Dependencies{API: api, Store: credential.NewMemory(), Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit == 0 || !strings.Contains(stdout.String(), "console-first") {
+	exit := Run(context.Background(), []string{"--json", "deploy", "--confirm"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	if exit == 0 || decodeEvent(t, stdout.Bytes()).Code != "CONSOLE_WRITER" {
 		t.Fatalf("console writer was not rejected: %s", stdout.String())
+	}
+}
+
+func TestConfigRefusalsKeepTheirCodes(t *testing.T) {
+	directory := initializedProject(t, "refusal-chat")
+	path := filepath.Join(directory, config.Filename)
+	if err := os.WriteFile(path, []byte("export const relay = {};\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	exit, stdout, _ := run(t, Dependencies{WorkingDir: directory}, "--json", "doctor")
+	if refusal := decodeEvent(t, []byte(stdout)); exit != exitFailure || refusal.Code != "CONFIG_INVALID" || refusal.Next != "oe --json doctor" || !strings.Contains(refusal.Error, "has no default export") {
+		t.Fatalf("a config with no default export was not CONFIG_INVALID: exit=%d %s", exit, stdout)
+	}
+
+	source := strings.Replace(string(mustRead(t, filepath.Join(initializedProject(t, "old-chat"), config.Filename))), `project: "old-chat"`, `project: ["old", "chat"].join("-")`, 1)
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := credential.NewMemory()
+	storeCredential(t, store, "project:read")
+	api := &fakeAPI{getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
+		return control.Project{Slug: "new-chat", Writer: "config"}, nil
+	}}
+	exit, stdout, _ = run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "project", "select", "new-chat")
+	refusal := decodeEvent(t, []byte(stdout))
+	edit, _ := refusal.Data["edit"].(map[string]any)
+	if exit != exitPersonAction || refusal.Code != "CONFIG_EDIT_REQUIRED" || edit["path"] != "project" || edit["currentExpression"] != `["old", "chat"].join("-")` || edit["newValue"] != "new-chat" {
+		t.Fatalf("a computed project was not CONFIG_EDIT_REQUIRED with the edit: exit=%d %s", exit, stdout)
+	}
+	if after := mustRead(t, path); string(after) != source {
+		t.Fatalf("CONFIG_EDIT_REQUIRED changed the file: %q", after)
+	}
+
+	t.Setenv("PATH", t.TempDir())
+	exit, stdout, _ = run(t, Dependencies{WorkingDir: directory}, "--json", "doctor")
+	if refusal := decodeEvent(t, []byte(stdout)); exit != exitPersonAction || refusal.Code != "NODE_REQUIRED" || refusal.Next != "oe --json doctor" || refusal.Action.URL != "https://nodejs.org/en/download" {
+		t.Fatalf("a missing node was not NODE_REQUIRED: exit=%d %s", exit, stdout)
+	}
+}
+
+func TestDeployRefusesAConfigWithoutProduction(t *testing.T) {
+	directory := t.TempDir()
+	value := config.New("sandbox-chat")
+	value.Environments.Production = nil
+	if err := config.Create(filepath.Join(directory, config.Filename), value); err != nil {
+		t.Fatal(err)
+	}
+	store := credential.NewMemory()
+	storeCredential(t, store, "deploy:write")
+	api := &fakeAPI{
+		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
+			return control.Project{Slug: "sandbox-chat", Writer: "config"}, nil
+		},
+		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
+			t.Fatal("a config without Production reached the plan")
+			return control.Plan{}, nil
+		},
+	}
+	exit, stdout, _ := run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "deploy", "--confirm")
+	if refusal := decodeEvent(t, []byte(stdout)); exit != exitUsage || refusal.Code != "USAGE_ERROR" || !strings.Contains(refusal.Error, "has no Production section") {
+		t.Fatalf("deploy without a Production section was not refused: exit=%d %s", exit, stdout)
 	}
 }
 
 func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
 	directory := initializedProject(t, "old-chat")
 	path := filepath.Join(directory, config.Filename)
-	value, err := config.Load(path)
-	if err != nil {
+	if err := writeRelayEnvironment(directory, ".env.local", envfile.DefaultVariable, "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/old-sandbox"); err != nil {
 		t.Fatal(err)
 	}
-	sandbox := value.Environments["sandbox"]
-	sandbox.RelayURL = "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/old-sandbox"
-	value.Environments["sandbox"] = sandbox
-	production := value.Environments["production"]
-	production.RelayURL = "https://relay.open-e2ee.dev/signal/v1/connection/old-production"
-	value.Environments["production"] = production
-	if err := config.Write(path, value); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeRelayEnvironment(directory, ".env.local", envfile.DefaultVariable, sandbox.RelayURL); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeRelayEnvironment(directory, ".env.production.local", envfile.DefaultVariable, production.RelayURL); err != nil {
+	if err := writeRelayEnvironment(directory, ".env.production.local", envfile.DefaultVariable, "https://relay.open-e2ee.dev/signal/v1/connection/old-production"); err != nil {
 		t.Fatal(err)
 	}
 	store := credential.NewMemory()
@@ -419,8 +464,8 @@ func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selected.Project != "new-chat" || selected.Environments["sandbox"].RelayURL != sandboxRelayURL || selected.Environments["production"].RelayURL != productionRelayURL {
-		t.Fatalf("project Relay connections were not replaced: %#v", selected)
+	if selected.Project != "new-chat" {
+		t.Fatalf("project select did not change the project: %#v", selected)
 	}
 	for filename, expected := range map[string]string{
 		".env.local":            sandboxRelayURL,
@@ -583,10 +628,19 @@ func projectEnvironment(relayURL, revision string) *control.ProjectEnvironment {
 func initializedProject(t *testing.T, project string) string {
 	t.Helper()
 	directory := t.TempDir()
-	if err := config.Write(filepath.Join(directory, config.Filename), config.New(project)); err != nil {
+	if err := config.Create(filepath.Join(directory, config.Filename), config.New(project)); err != nil {
 		t.Fatal(err)
 	}
 	return directory
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return contents
 }
 
 func storeCredential(t *testing.T, store credential.Store, scopes ...string) {

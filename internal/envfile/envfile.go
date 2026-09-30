@@ -185,6 +185,57 @@ func Write(path, variable, relayURL string) error {
 	return writeAtomic(path, []byte(result.String()), mode)
 }
 
+// Read returns the value of the last assignment of variable in the env file at
+// path. It removes the quotes of a quoted value, and the comment after an
+// unquoted value. A missing file or variable gives "".
+func Read(path, variable string) (string, error) {
+	contents, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	lines := split(string(contents))
+	result := ""
+	for index := 0; index < len(lines); index++ {
+		key, value, _, isAssignment := assignment(lines[index].text)
+		if !isAssignment {
+			continue
+		}
+		end := valueEnd(lines, index, value)
+		if key == variable {
+			result = unquote(lines, index, end, value)
+		}
+		index = end
+	}
+	return result, nil
+}
+
+// unquote returns the value of the assignment on lines[start:end+1], whose
+// text after the separator on the first line is value.
+func unquote(lines []line, start, end int, value string) string {
+	if value != "" && strings.ContainsRune("\"'`", rune(value[0])) && (end > start || closes(value[1:], value[0])) {
+		text := value
+		for index := start + 1; index <= end; index++ {
+			text += "\n" + lines[index].text
+		}
+		quote := text[0]
+		for index := 1; index < len(text); index++ {
+			switch text[index] {
+			case '\\':
+				index++
+			case quote:
+				return text[1:index]
+			}
+		}
+	}
+	if comment := strings.Index(value, " #"); comment >= 0 {
+		value = value[:comment]
+	}
+	return strings.TrimRight(value, " \t")
+}
+
 func split(contents string) []line {
 	var lines []line
 	for contents != "" {

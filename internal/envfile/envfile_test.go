@@ -254,3 +254,29 @@ func expectWrite(t *testing.T, path, variable, value, want string) {
 		}
 	}
 }
+
+func TestReadReturnsTheLastAssignment(t *testing.T) {
+	directory := t.TempDir()
+	if value, err := Read(filepath.Join(directory, ".env.local"), "RELAY"); err != nil || value != "" {
+		t.Fatalf("a missing file has no value: %q, %v", value, err)
+	}
+	for name, test := range map[string]struct{ contents, want string }{
+		"written":   {"A=1\r\n" + configuredComment + "\r\nRELAY=" + relayURL + "\r\n", relayURL},
+		"last wins": {"RELAY=https://old.example\nexport RELAY: " + relayURL + "\n", relayURL},
+		"quoted":    {"RELAY=\"" + relayURL + "\" # comment\n", relayURL},
+		"comment":   {"RELAY=" + relayURL + " # comment\n", relayURL},
+		"multiline": {"KEY=\"a\nRELAY=https://inside.example\n\"\nB=2\n", ""},
+		"other key": {"RELAY_URL=" + relayURL + "\n", ""},
+		"no value":  {unconfiguredComment + "\n", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), ".env.local")
+			if err := os.WriteFile(path, []byte(test.contents), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if value, err := Read(path, "RELAY"); err != nil || value != test.want {
+				t.Fatalf("want %q, got %q, %v", test.want, value, err)
+			}
+		})
+	}
+}

@@ -6,7 +6,7 @@
     "commands": [
       {
         "name": "init",
-        "summary": "Write open-e2ee.jsonc and an in-memory example script. Needs no login.",
+        "summary": "Write open-e2ee.config.ts and an in-memory example script. Needs no login.",
         "usage": ["oe init [--directory PATH] [--name PROJECT] [--force]"]
       },
       {
@@ -124,7 +124,7 @@
       },
       {
         "name": "--environment sandbox|production",
-        "summary": "Select the environment. The default is the command's own environment, then selectedEnvironment in open-e2ee.jsonc, then sandbox."
+        "summary": "Select the environment. The default is the command's own environment, then sandbox."
       },
       {
         "name": "--control-url URL",

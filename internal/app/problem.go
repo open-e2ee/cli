@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/open-e2ee/oe/internal/config"
 	"github.com/open-e2ee/oe/internal/control"
 	"github.com/open-e2ee/oe/internal/output"
 )
@@ -52,6 +53,16 @@ func loginRequired(code, message string, cause error) error {
 func classify(err error, commandLine string) *problem {
 	if known, ok := errors.AsType[*problem](err); ok {
 		return known
+	}
+	if failure, ok := errors.AsType[*config.Error](err); ok {
+		result := &problem{code: failure.Code, message: err.Error(), next: commandLine, exit: exitFailure, data: failure.Data, cause: err}
+		switch failure.Code {
+		case "NODE_REQUIRED":
+			result.exit, result.actionURL = exitPersonAction, "https://nodejs.org/en/download"
+		case "CONFIG_EDIT_REQUIRED":
+			result.exit = exitPersonAction
+		}
+		return result
 	}
 	if refusal, ok := errors.AsType[*control.APIError](err); ok {
 		result := &problem{code: cmp.Or(refusal.Code, "CONTROL_ERROR"), message: err.Error(), exit: exitFailure, cause: err}

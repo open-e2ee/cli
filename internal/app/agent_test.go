@@ -110,7 +110,7 @@ func TestTextFailureNamesTheNextCommandOnStandardError(t *testing.T) {
 	if exit != exitFailure || stdout != "" {
 		t.Fatalf("text failure wrote to stdout or exited %d: %q", exit, stdout)
 	}
-	if !strings.Contains(stderr, "error: open-e2ee.jsonc was not found") || !strings.HasSuffix(stderr, "next: oe init\n") {
+	if !strings.Contains(stderr, "error: open-e2ee.config.ts was not found") || !strings.HasSuffix(stderr, "next: oe init\n") {
 		t.Fatalf("text failure did not name oe init: %q", stderr)
 	}
 }

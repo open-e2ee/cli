@@ -83,6 +83,13 @@ for (const [goos, goarch] of targets) {
   );
 }
 
+// The release serves the config schema at the $id in schema/config-v2.json.
+const schema = await readFile(path.join(root, "schema/config-v2.json"));
+await writeFile(path.join(output, "artifacts", "config-v2.json"), schema);
+checksums.push(
+  `${createHash("sha256").update(schema).digest("hex")}  config-v2.json`,
+);
+
 for (const packageName of ["oe", "create-oe"]) {
   await cp(
     path.join(root, "packages", packageName),

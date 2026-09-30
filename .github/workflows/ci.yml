@@ -60,6 +60,51 @@ jobs:
             ${{ steps.go-paths.outputs.build }}
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
+  # The config loader runs on the node on PATH. It must work on the oldest
+  # supported Node.js and on the current release.
+  config-node:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.18.0", current]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.7
+          cache: false
+      - id: go-paths
+        run: |
+          echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+      - id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        timeout-minutes: 2
+        continue-on-error: true
+        with:
+          path: |
+            ${{ steps.go-paths.outputs.modules }}
+            ${{ steps.go-paths.outputs.build }}
+          key: go-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.sum') }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - run: node --version
+      - run: go test -count=1 ./internal/config
+      - if: steps.go-cache.outputs.cache-hit != 'true' && matrix.node == 'current'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        timeout-minutes: 2
+        continue-on-error: true
+        with:
+          path: |
+            ${{ steps.go-paths.outputs.modules }}
+            ${{ steps.go-paths.outputs.build }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
+
   packaging:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

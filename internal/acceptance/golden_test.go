@@ -39,8 +39,42 @@ func TestGoldenInitWorkflow(t *testing.T) {
 	if result != (commandResult{Status: "ok", Command: "init"}) {
 		t.Fatalf("unexpected init result: %#v", result)
 	}
-	if _, err := os.Stat(filepath.Join(project, "open-e2ee.jsonc")); err != nil {
-		t.Fatalf("initializer did not write open-e2ee.jsonc: %v", err)
+	if _, err := os.Stat(filepath.Join(project, "open-e2ee.config.ts")); err != nil {
+		t.Fatalf("initializer did not write open-e2ee.config.ts: %v", err)
+	}
+}
+
+// TestBuiltBinaryLoadsTheConfig runs the built binary outside the repository,
+// so the config loader can come only from the copy that the binary embeds.
+// doctor reaches RELAY_CONNECTION_MISSING only after the config loads.
+func TestBuiltBinaryLoadsTheConfig(t *testing.T) {
+	t.Parallel()
+
+	binary := filepath.Join(t.TempDir(), "oe")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "./cmd/oe")
+	build.Dir = repositoryRoot(t)
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build oe: %v\n%s", err, output)
+	}
+	project := t.TempDir()
+	if output, err := exec.Command(binary, "--json", "init", "--directory", project, "--name", "loaded-chat").CombinedOutput(); err != nil {
+		t.Fatalf("init failed: %v\n%s", err, output)
+	}
+	doctor := exec.Command(binary, "--json", "doctor")
+	doctor.Dir = project
+	output, _ := doctor.Output()
+	var result struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("decode doctor result: %v\n%s", err, output)
+	}
+	if result.Code != "RELAY_CONNECTION_MISSING" {
+		t.Fatalf("doctor did not load the config: %#v", result)
 	}
 }
 
