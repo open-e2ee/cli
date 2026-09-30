@@ -105,8 +105,9 @@ oe project connection --environment sandbox
 oe project connection my-chat --environment production --json
 ```
 
-The value is the `OPEN_E2EE_RELAY_URL` setting of the application. A project
-with no active environment fails with `ENVIRONMENT_NOT_ACTIVE`, and `next` names
+In JSON, `data.variable` names the variable that the application reads (see
+[Configuration ownership](#configuration-ownership)). A project with no active
+environment fails with `ENVIRONMENT_NOT_ACTIVE`, and `next` names
 `oe sandbox` or `oe deploy`.
 
 A production deploy never waits for an answer that no person can give. Without
@@ -134,13 +135,25 @@ revision. A console-first project or a revision conflict fails closed.
 
 The config records the selected environment. Each selected environment stores one public `relayUrl`. `oe sandbox` writes the
 sandbox value to `.env.local`. `oe deploy` writes the production value to
-`.env.production.local`. Both files use the semantic
-`OPEN_E2EE_RELAY_URL` setting. The commands add both files to `.gitignore`. The application
+`.env.production.local`. The commands add both files to `.gitignore`. The application
 does not select a Relay hostname or pair an endpoint with a second key.
 
+The variable follows the framework in `package.json`:
+
+| Dependency                      | Variable                          |
+| ------------------------------- | --------------------------------- |
+| `next`                          | `NEXT_PUBLIC_OPEN_E2EE_RELAY_URL` |
+| `expo`                          | `EXPO_PUBLIC_OPEN_E2EE_RELAY_URL` |
+| `vite`                          | `VITE_OPEN_E2EE_RELAY_URL`        |
+| Any other, or no `package.json` | `OPEN_E2EE_RELAY_URL`             |
+
+The first match in the table wins. The CLI replaces only its own comment and
+the lines that assign its variable. It keeps every other line, the line
+breaks, an `export` prefix, and the file permissions.
+
 `oe deploy` writes `.env.production.local`. If the hosting provider does not
-read that file, install its `OPEN_E2EE_RELAY_URL` value in the production build
-environment. The application source stays unchanged.
+read that file, install the value of the variable that `oe deploy` names in the
+production build environment. The application source stays unchanged.
 
 ## iOS notification workflow
 

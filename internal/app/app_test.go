@@ -16,6 +16,7 @@ import (
 	"github.com/open-e2ee/cli/internal/config"
 	"github.com/open-e2ee/cli/internal/control"
 	"github.com/open-e2ee/cli/internal/credential"
+	"github.com/open-e2ee/cli/internal/envfile"
 )
 
 const (
@@ -112,6 +113,84 @@ func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
 	}
 	if activationCalls != 2 || !strings.Contains(stdout.String(), "firstAcknowledgedMessage") {
 		t.Fatalf("did not wait for first acknowledgement: calls=%d output=%s", activationCalls, stdout.String())
+	}
+}
+
+func TestSandboxWritesTheNextJSVariable(t *testing.T) {
+	directory := initializedProject(t, "next-chat")
+	if err := os.WriteFile(filepath.Join(directory, "package.json"), []byte(`{"dependencies":{"next":"16.0.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := credential.NewMemory()
+	storeCredential(t, store, "project:write")
+	api := &fakeAPI{bootstrapSandbox: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
+		return control.Bootstrap{ProjectSlug: "next-chat", Writer: "config", Environment: "sandbox", SandboxRelayURL: sandboxRelayURL}, nil
+	}}
+	var stdout bytes.Buffer
+	exit := Run(context.Background(), []string{"--json", "sandbox", "--no-wait"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	if exit != 0 {
+		t.Fatalf("sandbox failed: %s", stdout.String())
+	}
+	environment, err := os.ReadFile(filepath.Join(directory, ".env.local"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(environment), "\nNEXT_PUBLIC_OPEN_E2EE_RELAY_URL="+sandboxRelayURL+"\n") || strings.Contains(string(environment), "\nOPEN_E2EE_RELAY_URL=") {
+		t.Fatalf("a Next.js client cannot read the Sandbox connection: %q", environment)
+	}
+}
+
+func TestDeployAndConnectionNameTheExpoVariable(t *testing.T) {
+	directory := initializedProject(t, "expo-chat")
+	if err := os.WriteFile(filepath.Join(directory, "package.json"), []byte(`{"dependencies":{"expo":"55.0.0"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := credential.NewMemory()
+	storeCredential(t, store, "deploy:write", "project:read")
+	api := &fakeAPI{
+		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
+			return control.Project{Slug: "expo-chat", Writer: "config", Production: projectEnvironment(productionRelayURL, "7")}, nil
+		},
+		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
+			return control.Plan{ID: "plan-1", ProjectSlug: "expo-chat", Environment: "production", ExpectedRevision: "7", BillingReady: true}, nil
+		},
+		deploy: func(context.Context, control.CredentialRequest, control.DeployRequest) (control.Deployment, error) {
+			return control.Deployment{ID: "deployment-1", Revision: "revision-8", Status: "complete", RelayURL: productionRelayURL}, nil
+		},
+	}
+	dependencies := Dependencies{API: api, Store: store, WorkingDir: directory}
+	exit, stdout, _ := run(t, dependencies, "--json", "deploy", "--confirm")
+	deployed := decodeEvent(t, []byte(stdout))
+	if exit != 0 || deployed.Data["variable"] != "EXPO_PUBLIC_OPEN_E2EE_RELAY_URL" || !strings.Contains(deployed.Message, "Install EXPO_PUBLIC_OPEN_E2EE_RELAY_URL from .env.production.local") {
+		t.Fatalf("deploy did not name the Expo variable: %s", stdout)
+	}
+	environment, err := os.ReadFile(filepath.Join(directory, ".env.production.local"))
+	if err != nil || !strings.Contains(string(environment), "\nEXPO_PUBLIC_OPEN_E2EE_RELAY_URL="+productionRelayURL+"\n") {
+		t.Fatalf("production environment has no Expo variable: %q %v", environment, err)
+	}
+	exit, stdout, _ = run(t, dependencies, "--json", "project", "connection", "--environment", "production")
+	if connection := decodeEvent(t, []byte(stdout)); exit != 0 || connection.Data["variable"] != "EXPO_PUBLIC_OPEN_E2EE_RELAY_URL" {
+		t.Fatalf("connection did not name the Expo variable: %s", stdout)
+	}
+}
+
+func TestUnreadablePackageJSONFailsBeforeRemoteMutation(t *testing.T) {
+	directory := initializedProject(t, "broken-chat")
+	if err := os.WriteFile(filepath.Join(directory, "package.json"), []byte(`{"dependencies":`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := credential.NewMemory()
+	storeCredential(t, store, "project:write")
+	api := &fakeAPI{bootstrapSandbox: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
+		t.Fatal("sandbox changed the server before it could choose the variable")
+		return control.Bootstrap{}, nil
+	}}
+	exit, stdout, _ := run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "sandbox", "--no-wait")
+	if exit == 0 || !strings.Contains(stdout, "package.json") {
+		t.Fatalf("an unreadable package.json did not stop the sandbox: %s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(directory, ".env.local")); !os.IsNotExist(err) {
+		t.Fatalf("sandbox wrote .env.local: %v", err)
 	}
 }
 
@@ -314,10 +393,10 @@ func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
 	if err := config.Write(path, value); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeRelayEnvironment(directory, ".env.local", sandbox.RelayURL); err != nil {
+	if err := writeRelayEnvironment(directory, ".env.local", envfile.DefaultVariable, sandbox.RelayURL); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeRelayEnvironment(directory, ".env.production.local", production.RelayURL); err != nil {
+	if err := writeRelayEnvironment(directory, ".env.production.local", envfile.DefaultVariable, production.RelayURL); err != nil {
 		t.Fatal(err)
 	}
 	store := credential.NewMemory()
@@ -351,10 +430,10 @@ func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
 func TestRelayEnvironmentRemovalCannotLeaveAnotherProjectConnection(t *testing.T) {
 	directory := t.TempDir()
 	filename := ".env.production.local"
-	if err := writeRelayEnvironment(directory, filename, productionRelayURL); err != nil {
+	if err := writeRelayEnvironment(directory, filename, envfile.DefaultVariable, productionRelayURL); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeRelayEnvironment(directory, filename, ""); err != nil {
+	if err := writeRelayEnvironment(directory, filename, envfile.DefaultVariable, ""); err != nil {
 		t.Fatal(err)
 	}
 	contents, err := os.ReadFile(filepath.Join(directory, filename))
