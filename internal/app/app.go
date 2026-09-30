@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-e2ee/cli/internal/agent"
 	"github.com/open-e2ee/cli/internal/config"
 	"github.com/open-e2ee/cli/internal/control"
 	"github.com/open-e2ee/cli/internal/credential"
@@ -41,8 +42,9 @@ type Dependencies struct {
 	Sleep   func(context.Context, time.Duration) error
 	Now     func() time.Time
 	Getenv  func(string) string
-	// Interactive reports whether a person can answer a prompt. The default is
-	// true only when In is a terminal.
+	// Interactive reports whether In is a terminal. The default reads In. A
+	// person can answer a prompt only when it is true and no agent runs the
+	// CLI.
 	Interactive func() bool
 	WorkingDir  string
 }
@@ -65,6 +67,12 @@ type runner struct {
 	// environmentExplicit is true when the caller passed --environment.
 	environmentExplicit bool
 	mode                output.Mode
+	// underAgent is true when a coding agent runs the CLI. Then the CLI never
+	// prompts and never opens a browser.
+	underAgent bool
+	// harness is the agent that the environment names. It is zero when no
+	// variable names one, or when --agent no overrides the detection.
+	harness agent.Harness
 }
 
 func Run(ctx context.Context, args []string, dependencies Dependencies) int {
@@ -74,7 +82,14 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 	if dependencies.Err == nil {
 		dependencies.Err = os.Stderr
 	}
+	if dependencies.Getenv == nil {
+		dependencies.Getenv = os.Getenv
+	}
 	global, command, commandArgs, err := parseGlobal(args)
+	harness, underAgent := agent.Resolve(global.agent, dependencies.Getenv)
+	if underAgent && !global.modeExplicit {
+		global.mode = output.JSON
+	}
 	writer := output.New(global.mode, dependencies.Out, dependencies.Err)
 	if err != nil {
 		return fail(writer, cmp.Or(command, "oe"), args, err)
@@ -100,9 +115,6 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 	}
 	if dependencies.Now == nil {
 		dependencies.Now = time.Now
-	}
-	if dependencies.Getenv == nil {
-		dependencies.Getenv = os.Getenv
 	}
 	if dependencies.HTTP == nil {
 		dependencies.HTTP = &http.Client{Timeout: 20 * time.Second}
@@ -133,6 +145,7 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 		getenv: dependencies.Getenv, directory: dependencies.WorkingDir,
 		controlURL: global.controlURL, environment: global.environment,
 		environmentExplicit: global.environmentExplicit, mode: global.mode,
+		underAgent: underAgent, harness: harness,
 	}
 	if err := r.execute(ctx, command, commandArgs); err != nil {
 		return fail(writer, command, args, err)
@@ -292,8 +305,10 @@ func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration) (c
 		fmt.Fprintln(r.errOut, prompt)
 	}
 	// The prompt is already visible, so a browser that cannot open is not a
-	// failure.
-	_ = r.openURL(authorization.VerificationURL)
+	// failure. An agent or a script hands the visible URL to a person.
+	if r.canPrompt() {
+		_ = r.openURL(authorization.VerificationURL)
+	}
 	interval := time.Duration(authorization.IntervalSeconds) * time.Second
 	if interval < time.Second {
 		interval = 2 * time.Second
@@ -498,7 +513,7 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 		return r.billingSetupRequired(plan, access)
 	}
 	if !*confirm {
-		if access.Source == "environment" || r.mode != output.Text || !r.interactive() {
+		if access.Source == "environment" || r.mode != output.Text || !r.canPrompt() {
 			return &problem{
 				code: "CONFIRMATION_REQUIRED", exit: exitUsage, next: "oe deploy --confirm",
 				message: fmt.Sprintf("a production deploy of %d change(s) needs --confirm when no person can answer a prompt; review the changes, then run oe deploy --confirm", len(plan.Changes)),
@@ -544,17 +559,17 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 }
 
 // billingSetupRequired stops a deploy before a production mutation. It opens
-// the setup page for a person and always returns the URL, so a caller without
-// a browser can hand it on.
+// the setup page for a person who can answer a prompt, and it always returns
+// the URL in action.url, so a caller without a browser can hand it on.
 func (r *runner) billingSetupRequired(plan control.Plan, access credential.Credential) error {
 	if plan.BillingSetupURL == "" {
 		return &problem{code: "BILLING_SETUP_REQUIRED", message: "production billing setup is incomplete and the control API returned no setup URL", exit: exitFailure}
 	}
-	if access.Source != "environment" {
+	if access.Source != "environment" && r.canPrompt() {
 		_ = r.openURL(plan.BillingSetupURL)
 	}
 	return &problem{
-		code: "BILLING_SETUP_REQUIRED", exit: exitFailure, next: "oe deploy",
+		code: "BILLING_SETUP_REQUIRED", exit: exitFailure, next: "oe deploy", actionURL: plan.BillingSetupURL,
 		message: "production billing setup is incomplete; finish it at " + plan.BillingSetupURL + ", then run oe deploy again",
 		data:    map[string]any{"billingSetupUrl": plan.BillingSetupURL},
 	}
@@ -1132,6 +1147,8 @@ func (r *runner) loadConfig() (string, config.Config, error) {
 
 type globalOptions struct {
 	mode                output.Mode
+	modeExplicit        bool
+	agent               agent.Mode
 	controlURL          string
 	environment         string
 	environmentExplicit bool
@@ -1142,7 +1159,7 @@ type globalOptions struct {
 // arguments go to the command in their order. A failure still returns the
 // output mode, so the caller can report the failure in that mode.
 func parseGlobal(args []string) (globalOptions, string, []string, error) {
-	options := globalOptions{mode: output.Text, controlURL: defaultControlURL}
+	options := globalOptions{mode: output.Text, agent: agent.Auto, controlURL: defaultControlURL}
 	command := ""
 	var rest []string
 	var failure error
@@ -1159,10 +1176,10 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 		name, value, inline := strings.Cut(argument, "=")
 		switch {
 		case argument == "--json":
-			options.mode = output.JSON
+			options.mode, options.modeExplicit = output.JSON, true
 		case argument == "--json-stream":
-			options.mode = output.JSONStream
-		case name == "--control-url" || name == "--environment":
+			options.mode, options.modeExplicit = output.JSONStream, true
+		case name == "--control-url" || name == "--environment" || name == "--agent":
 			if !inline {
 				if index+1 == len(args) {
 					failure = cmp.Or(failure, usageError(command, name+" needs a value"))
@@ -1171,9 +1188,12 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 				index++
 				value = args[index]
 			}
-			if name == "--control-url" {
+			switch name {
+			case "--control-url":
 				options.controlURL = value
-			} else {
+			case "--agent":
+				options.agent = agent.Mode(value)
+			default:
 				options.environment = value
 				options.environmentExplicit = true
 			}
@@ -1191,6 +1211,10 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 	}
 	if failure == nil && options.environmentExplicit && options.environment != "sandbox" && options.environment != "production" {
 		failure = usageError(command, "--environment must be sandbox or production")
+	}
+	if !options.agent.Valid() {
+		failure = cmp.Or(failure, usageError(command, "--agent must be yes, no, or auto"))
+		options.agent = agent.Auto
 	}
 	return options, command, rest, failure
 }
@@ -1245,6 +1269,13 @@ func parseArguments(flags *flag.FlagSet, command string, args []string) error {
 		return usageError(command, "oe "+flags.Name()+": "+err.Error())
 	}
 	return nil
+}
+
+// canPrompt reports whether a person can answer a prompt: In is a terminal
+// and no agent runs the CLI. When it is false, the CLI never prompts and
+// never opens a browser.
+func (r *runner) canPrompt() bool {
+	return !r.underAgent && r.interactive()
 }
 
 // isTerminal reports whether in is a character device, so a person can answer

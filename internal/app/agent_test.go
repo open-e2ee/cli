@@ -12,19 +12,33 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-e2ee/cli/internal/agent"
 	"github.com/open-e2ee/cli/internal/control"
 	"github.com/open-e2ee/cli/internal/credential"
 	"github.com/open-e2ee/cli/internal/projectlock"
 )
 
+// TestMain removes the variables that coding agents set, so a test that runs
+// under an agent sees the same defaults as CI. A test that needs a variable
+// passes Getenv.
+func TestMain(m *testing.M) {
+	for _, name := range agent.Variables() {
+		os.Unsetenv(name)
+	}
+	m.Run()
+}
+
 type event struct {
-	Status  string         `json:"status"`
-	Command string         `json:"command"`
-	Message string         `json:"message"`
-	Error   string         `json:"error"`
-	Code    string         `json:"code"`
-	Next    string         `json:"next"`
-	Data    map[string]any `json:"data"`
+	Status  string `json:"status"`
+	Command string `json:"command"`
+	Message string `json:"message"`
+	Error   string `json:"error"`
+	Code    string `json:"code"`
+	Next    string `json:"next"`
+	Action  struct {
+		URL string `json:"url"`
+	} `json:"action"`
+	Data map[string]any `json:"data"`
 }
 
 // decodeEvent decodes the one JSON document that --json writes and fails when
@@ -70,6 +84,8 @@ func TestUsageErrorsExitTwoInTheRequestedMode(t *testing.T) {
 		"missing subcommand":        {"--json", "project"},
 		"unknown help topic":        {"--json", "help", "bogus"},
 		"sandbox with production":   {"--json", "--environment", "production", "sandbox"},
+		"invalid agent mode":        {"--json", "--agent=maybe", "doctor"},
+		"missing agent mode":        {"doctor", "--json", "--agent"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			exit, stdout, stderr := run(t, Dependencies{}, args...)
@@ -216,24 +232,149 @@ func TestProjectShowNeedsNoConfigAndOmitsTheConnection(t *testing.T) {
 	}
 }
 
-func TestTextDeployWithoutATerminalRequiresConfirm(t *testing.T) {
+// productionPlan answers a Production plan for project. The plan needs a
+// card when setupURL is not empty.
+func productionPlan(project, setupURL string) *fakeAPI {
+	return &fakeAPI{
+		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
+			return control.Project{Slug: project, Writer: "config"}, nil
+		},
+		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
+			return control.Plan{
+				ID: "plan-1", ProjectSlug: project, Environment: "production", ExpectedRevision: "0",
+				BillingReady: setupURL == "", BillingSetupURL: setupURL,
+			}, nil
+		},
+	}
+}
+
+// deviceLogin answers a browser authorization that a person approves at once.
+func deviceLogin() *fakeAPI {
+	return &fakeAPI{
+		startAuthorization: func(context.Context, control.AuthorizationRequest) (control.Authorization, error) {
+			return control.Authorization{DeviceCode: "device", VerificationURL: "https://login.example/device", UserCode: "ABCD", IntervalSeconds: 1}, nil
+		},
+		pollAuthorization: func(context.Context, control.Authorization) (control.Token, error) {
+			return control.Token{AccessToken: "token"}, nil
+		},
+	}
+}
+
+// unreadable is standard input that fails the test when a command reads it.
+type unreadable struct{ t *testing.T }
+
+func (u unreadable) Read([]byte) (int, error) {
+	u.t.Error("the command read standard input")
+	return 0, io.EOF
+}
+
+// opener is a fake browser that records each URL that it opens.
+type opener struct{ opened []string }
+
+func (o *opener) open(target string) error {
+	o.opened = append(o.opened, target)
+	return nil
+}
+
+func terminal() bool { return true }
+
+func TestAgentFlagOverridesDetection(t *testing.T) {
+	claudeCode := environment(map[string]string{"CLAUDECODE": "1"})
+	exit, stdout, _ := run(t, Dependencies{Getenv: claudeCode}, "--agent", "no", "version")
+	if exit != 0 || stdout != Version+"\n" {
+		t.Fatalf("--agent no did not restore text: exit=%d %q", exit, stdout)
+	}
+	exit, stdout, _ = run(t, Dependencies{}, "version", "--agent=yes")
+	if exit != 0 || decodeEvent(t, []byte(stdout)).Data["version"] != Version {
+		t.Fatalf("--agent yes did not select JSON: exit=%d %q", exit, stdout)
+	}
+	for _, test := range []struct {
+		args   []string
+		getenv func(string) string
+		opened int
+	}{
+		{[]string{"--agent", "no", "login"}, claudeCode, 1},
+		{[]string{"--agent", "yes", "login"}, environment(nil), 0},
+		{[]string{"--agent", "auto", "login"}, claudeCode, 0},
+	} {
+		browser := &opener{}
+		exit, stdout, _ := run(t, Dependencies{
+			API: deviceLogin(), Getenv: test.getenv, Interactive: terminal, OpenURL: browser.open,
+		}, test.args...)
+		if exit != 0 || len(browser.opened) != test.opened {
+			t.Fatalf("%v opened %d browsers, want %d: exit=%d %s", test.args, len(browser.opened), test.opened, exit, stdout)
+		}
+	}
+}
+
+func TestAgentNeverOpensABrowser(t *testing.T) {
+	codex := environment(map[string]string{"CODEX_THREAD_ID": "codex-thread"})
+	browser := &opener{}
+	exit, stdout, stderr := run(t, Dependencies{
+		API: deviceLogin(), Getenv: codex, Interactive: terminal, OpenURL: browser.open,
+	}, "login")
+	if exit != 0 || !strings.Contains(stderr, "Open https://login.example/device and enter code ABCD.") {
+		t.Fatalf("an agent login hid the URL from the person who approves it: exit=%d stdout=%s stderr=%q", exit, stdout, stderr)
+	}
+
+	directory := initializedProject(t, "agent-chat")
+	store := credential.NewMemory()
+	storeCredential(t, store, "deploy:write")
+	exit, stdout, _ = run(t, Dependencies{
+		API: productionPlan("agent-chat", "https://billing.example/setup"), Store: store, WorkingDir: directory,
+		Getenv: codex, Interactive: terminal, OpenURL: browser.open,
+	}, "deploy", "--confirm")
+	failure := decodeEvent(t, []byte(stdout))
+	if exit != exitFailure || failure.Code != "BILLING_SETUP_REQUIRED" || failure.Action.URL != "https://billing.example/setup" {
+		t.Fatalf("an agent did not get the setup page in action.url: exit=%d %s", exit, stdout)
+	}
+	if len(browser.opened) != 0 {
+		t.Fatalf("an agent opened a browser: %v", browser.opened)
+	}
+}
+
+func TestNoTTYAndNoAgentNeverPrompts(t *testing.T) {
 	directory := initializedProject(t, "headless-chat")
 	store := credential.NewMemory()
 	storeCredential(t, store, "deploy:write")
-	api := &fakeAPI{
-		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-			return control.Project{Slug: "headless-chat", Writer: "config"}, nil
-		},
-		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
-			return control.Plan{ID: "plan-1", ProjectSlug: "headless-chat", Environment: "production", ExpectedRevision: "0", BillingReady: true}, nil
-		},
+	browser := &opener{}
+	script := Dependencies{
+		Store: store, WorkingDir: directory, In: unreadable{t},
+		Interactive: func() bool { return false }, OpenURL: browser.open,
 	}
-	exit, stdout, stderr := run(t, Dependencies{
-		API: api, Store: store, WorkingDir: directory,
-		In: strings.NewReader("y\n"), Interactive: func() bool { return false },
+
+	script.API = productionPlan("headless-chat", "")
+	exit, stdout, stderr := run(t, script, "deploy")
+	if exit != exitUsage || stdout != "" || strings.Contains(stderr, "[y/N]") || !strings.HasSuffix(stderr, "next: oe deploy --confirm\n") {
+		t.Fatalf("a script got a prompt in place of a text refusal: exit=%d stdout=%q stderr=%q", exit, stdout, stderr)
+	}
+
+	script.API = productionPlan("headless-chat", "https://billing.example/setup")
+	exit, _, stderr = run(t, script, "deploy", "--confirm")
+	if exit != exitFailure || !strings.Contains(stderr, "https://billing.example/setup") {
+		t.Fatalf("a script did not get the setup page: exit=%d stderr=%q", exit, stderr)
+	}
+
+	script.API = deviceLogin()
+	exit, stdout, _ = run(t, script, "login")
+	if exit != 0 || !strings.Contains(stdout, "https://login.example/device") {
+		t.Fatalf("a script login hid the URL: exit=%d %q", exit, stdout)
+	}
+	if len(browser.opened) != 0 {
+		t.Fatalf("a script opened a browser: %v", browser.opened)
+	}
+}
+
+func TestAgentAtATerminalNeverPrompts(t *testing.T) {
+	directory := initializedProject(t, "terminal-chat")
+	store := credential.NewMemory()
+	storeCredential(t, store, "deploy:write")
+	exit, stdout, _ := run(t, Dependencies{
+		API: productionPlan("terminal-chat", ""), Store: store, WorkingDir: directory, In: unreadable{t},
+		Getenv: environment(map[string]string{"OPENCODE": "1"}), Interactive: terminal,
 	}, "deploy")
-	if exit != exitUsage || stdout != "" || !strings.HasSuffix(stderr, "next: oe deploy --confirm\n") {
-		t.Fatalf("headless deploy did not ask for --confirm: exit=%d stdout=%q stderr=%q", exit, stdout, stderr)
+	if failure := decodeEvent(t, []byte(stdout)); exit != exitUsage || failure.Code != "CONFIRMATION_REQUIRED" || failure.Next != "oe deploy --confirm" {
+		t.Fatalf("an agent at a terminal was not refused without a prompt: exit=%d %s", exit, stdout)
 	}
 }
 
@@ -271,5 +412,27 @@ func TestInitIgnoresTheLockFile(t *testing.T) {
 	exit, stdout, _ := run(t, Dependencies{WorkingDir: directory}, "--json", "init")
 	if failure := decodeEvent(t, []byte(stdout)); exit != exitFailure || failure.Code != "CONFIG_EXISTS" || failure.Next != "oe init --force" {
 		t.Fatalf("existing config was not a named conflict: %s", stdout)
+	}
+}
+
+// environment returns a Getenv that reads only values.
+func environment(values map[string]string) func(string) string {
+	return func(name string) string { return values[name] }
+}
+
+func TestAgentDefaultsToJSON(t *testing.T) {
+	claudeCode := environment(map[string]string{"CLAUDECODE": "1"})
+	exit, stdout, _ := run(t, Dependencies{Getenv: claudeCode}, "version")
+	if exit != 0 || decodeEvent(t, []byte(stdout)).Data["version"] != Version {
+		t.Fatalf("an agent did not get JSON by default: exit=%d %q", exit, stdout)
+	}
+	exit, stdout, stderr := run(t, Dependencies{Getenv: claudeCode}, "plan")
+	if failure := decodeEvent(t, []byte(stdout)); exit != exitFailure || stderr != "" || failure.Code != "CONFIG_NOT_FOUND" {
+		t.Fatalf("an agent did not get the failure as JSON on stdout: exit=%d stdout=%q stderr=%q", exit, stdout, stderr)
+	}
+	exit, stdout, _ = run(t, Dependencies{API: deviceLogin(), Getenv: claudeCode}, "--json-stream", "login")
+	first, _, _ := strings.Cut(stdout, "\n")
+	if exit != 0 || decodeEvent(t, []byte(first)).Status != "progress" {
+		t.Fatalf("--json-stream under an agent wrote no progress event: exit=%d %q", exit, stdout)
 	}
 }

@@ -83,6 +83,7 @@ var commandSurface = []commandSpec{
 var globalFlagSurface = []globalFlagSpec{
 	{"--json", "Write exactly one JSON document to stdout, for success and for failure."},
 	{"--json-stream", "Write newline-delimited JSON progress events, then one final event, to stdout."},
+	{"--agent yes|no|auto", "Say whether a coding agent runs oe. The default, auto, reads the environment variables that coding agents set. Under an agent, the default output is JSON, and oe never prompts and never opens a browser. --agent no restores text output."},
 	{"--environment sandbox|production", "Select the environment. The default is the command's own environment, then selectedEnvironment in open-e2ee.jsonc, then sandbox."},
 	{"--control-url URL", "Use another control API. It must use HTTPS except on loopback."},
 	{"-h, --help", "Show help."},
