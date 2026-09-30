@@ -73,15 +73,18 @@ stdout, for success and for failure:
 ```
 
 Switch on `code`, not on the text of `error`. When `next` is present, it is the
-command that moves the task forward. In text mode, a failure goes to stderr as
-`error:` and `next:` lines, and stdout stays clean.
+command that moves the task forward. When `action` is present, `action.url` is a
+page that a person must open, so give it to the person. In text mode, a failure
+goes to stderr as `error:`, `action:`, and `next:` lines, and stdout stays clean.
 
-| Exit code | Meaning                                                                               |
-| --------- | ------------------------------------------------------------------------------------- |
-| 0         | The command succeeded.                                                                |
-| 1         | The command failed. `code` tells why.                                                 |
-| 2         | The command line is invalid, or a required input is missing, for example `--confirm`. |
-| 4         | Authentication is required. Run `oe login`.                                           |
+| Exit code | Meaning                                                                                            |
+| --------- | -------------------------------------------------------------------------------------------------- |
+| 0         | The command succeeded.                                                                             |
+| 1         | The command failed. `code` tells why.                                                              |
+| 2         | The command line is invalid, or a required input is missing, for example `--confirm`.              |
+| 4         | Authentication is required. Run `oe login`.                                                        |
+| 5         | A person must act. `error` tells what to do. When `action.url` is present, it is the page to open. |
+| 6         | The failure is temporary. `next` is the same command. Run it again later.                          |
 
 Log in once. A person must approve the login in a browser, so start the command
 in the background and give the person the URL and code:

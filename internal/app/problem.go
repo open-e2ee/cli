@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/open-e2ee/cli/internal/control"
 	"github.com/open-e2ee/cli/internal/output"
@@ -19,7 +20,10 @@ type problem struct {
 	next    string
 	exit    int
 	data    map[string]any
-	cause   error
+	// actionURL is a page that a person must open. The envelope carries it as
+	// action.url.
+	actionURL string
+	cause     error
 }
 
 func (p *problem) Error() string { return p.message }
@@ -42,8 +46,9 @@ func loginRequired(code, message string, cause error) error {
 }
 
 // classify gives every error that reaches Run a code and an exit status. A
-// control API refusal keeps the code that the console sent.
-func classify(err error) *problem {
+// control API refusal keeps the code that the console sent. A temporary failure
+// exits 6, and its next is the command line of the run.
+func classify(err error, commandLine string) *problem {
 	if known, ok := errors.AsType[*problem](err); ok {
 		return known
 	}
@@ -56,15 +61,40 @@ func classify(err error) *problem {
 			result.exit = exitAuthentication
 		case refusal.Code == "ORGANIZATION_REQUIRED":
 			result.next = "oe login"
+		case refusal.Code == "AUTHORITY_UNAVAILABLE", refusal.Status == http.StatusTooManyRequests,
+			refusal.Status == http.StatusBadGateway, refusal.Status == http.StatusServiceUnavailable,
+			refusal.Status == http.StatusGatewayTimeout:
+			result.next = commandLine
+			result.exit = exitTemporary
 		}
 		return result
 	}
 	if _, ok := errors.AsType[*url.Error](err); ok {
-		return &problem{code: "CONTROL_UNAVAILABLE", message: err.Error(), exit: exitFailure, cause: err}
+		return &problem{code: "CONTROL_UNAVAILABLE", message: err.Error(), next: commandLine, exit: exitTemporary, cause: err}
 	}
 	return &problem{code: "COMMAND_FAILED", message: err.Error(), exit: exitFailure, cause: err}
 }
 
+// commandLine writes args as one oe command line for a POSIX shell. It quotes
+// each argument that holds a character outside a safe set.
+func commandLine(args []string) string {
+	words := []string{"oe"}
+	for _, argument := range args {
+		if argument != "" && strings.Trim(argument, shellSafe) == "" {
+			words = append(words, argument)
+			continue
+		}
+		words = append(words, "'"+strings.ReplaceAll(argument, "'", `'\''`)+"'")
+	}
+	return strings.Join(words, " ")
+}
+
+const shellSafe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./_-"
+
 func (p *problem) output() output.Problem {
-	return output.Problem{Message: p.message, Code: p.code, Next: p.next, Data: p.data}
+	result := output.Problem{Message: p.message, Code: p.code, Next: p.next, Data: p.data}
+	if p.actionURL != "" {
+		result.Action = &output.Action{URL: p.actionURL}
+	}
+	return result
 }

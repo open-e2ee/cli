@@ -100,6 +100,14 @@
       {
         "code": 4,
         "meaning": "Authentication is required. Run oe login."
+      },
+      {
+        "code": 5,
+        "meaning": "A person must act before the command can continue. The error tells what to do. When action.url is present, it is the page that the person opens."
+      },
+      {
+        "code": 6,
+        "meaning": "The failure is temporary. It is safe to run the same command again later. next is that command."
       }
     ],
     "globalFlags": [

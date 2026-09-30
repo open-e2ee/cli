@@ -76,7 +76,7 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 	global, command, commandArgs, err := parseGlobal(args)
 	writer := output.New(global.mode, dependencies.Out, dependencies.Err)
 	if err != nil {
-		return fail(writer, cmp.Or(command, "oe"), err)
+		return fail(writer, cmp.Or(command, "oe"), args, err)
 	}
 	if command == "" {
 		command = "help"
@@ -109,20 +109,20 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 	if dependencies.WorkingDir == "" {
 		dependencies.WorkingDir, err = os.Getwd()
 		if err != nil {
-			return fail(writer, command, fmt.Errorf("determine working directory: %w", err))
+			return fail(writer, command, args, fmt.Errorf("determine working directory: %w", err))
 		}
 	}
 	if !global.environmentExplicit {
 		global.environment = defaultEnvironment(command, dependencies.WorkingDir)
 	}
 	if err := validateControlURL(global.controlURL); err != nil {
-		return fail(writer, command, usageError(command, err.Error()))
+		return fail(writer, command, args, usageError(command, err.Error()))
 	}
 	api := dependencies.API
 	if api == nil {
 		api, err = control.New(global.controlURL, dependencies.HTTP)
 		if err != nil {
-			return fail(writer, command, usageError(command, err.Error()))
+			return fail(writer, command, args, usageError(command, err.Error()))
 		}
 	}
 	r := &runner{
@@ -134,14 +134,15 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 		environmentExplicit: global.environmentExplicit, mode: global.mode,
 	}
 	if err := r.execute(ctx, command, commandArgs); err != nil {
-		return fail(writer, command, err)
+		return fail(writer, command, args, err)
 	}
 	return 0
 }
 
-// fail writes one failure and returns the exit status of its code.
-func fail(writer *output.Writer, command string, err error) int {
-	failure := classify(err)
+// fail writes one failure and returns the exit status of its code. args is
+// the command line of the run, which a temporary failure names as next.
+func fail(writer *output.Writer, command string, args []string, err error) int {
+	failure := classify(err, commandLine(args))
 	_ = writer.Failure(command, failure.output())
 	return failure.exit
 }
