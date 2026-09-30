@@ -13,9 +13,10 @@
   },
   "devDependencies": {
     "@open-e2ee/signal-protocol-sdk": "8.2.0",
-    "prettier": "3.9.6"
+    "prettier": "3.9.6",
+    "typescript": "7.0.2"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
   }
 }

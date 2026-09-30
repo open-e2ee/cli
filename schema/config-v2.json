@@ -1,27 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://open-e2ee.dev/schemas/config/v1.json",
+  "$id": "https://github.com/open-e2ee/oe/releases/latest/download/config-v2.json",
   "title": "OpenE2EE project configuration",
+  "description": "The value that open-e2ee.config.ts exports as its default.",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "$schema",
-    "project",
-    "writer",
-    "selectedEnvironment",
-    "relay",
-    "environments"
-  ],
+  "required": ["product", "project", "relay", "environments"],
   "properties": {
-    "$schema": { "const": "https://open-e2ee.dev/schemas/config/v1.json" },
+    "product": { "enum": ["signal-relay"] },
     "project": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
-    "writer": { "enum": ["config", "console"] },
-    "selectedEnvironment": { "enum": ["sandbox", "production"] },
     "relay": { "$ref": "#/$defs/relayPolicy" },
     "environments": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["sandbox", "production"],
+      "required": ["sandbox"],
       "properties": {
         "sandbox": { "$ref": "#/$defs/environment" },
         "production": { "$ref": "#/$defs/environment" }
@@ -35,6 +27,15 @@
     "relayPolicy": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["deliveryRetention", "attachmentRetention"],
+      "properties": {
+        "deliveryRetention": { "$ref": "#/$defs/retention" },
+        "attachmentRetention": { "$ref": "#/$defs/retention" }
+      }
+    },
+    "relayOverride": {
+      "type": "object",
+      "additionalProperties": false,
       "properties": {
         "deliveryRetention": { "$ref": "#/$defs/retention" },
         "attachmentRetention": { "$ref": "#/$defs/retention" }
@@ -44,12 +45,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "relayUrl": {
-          "type": "string",
-          "format": "uri",
-          "pattern": "^https://(?:sandbox\\.)?relay\\.open-e2ee\\.dev/signal/v1/connection/[A-Za-z0-9_-]{1,255}$"
-        },
-        "relay": { "$ref": "#/$defs/relayPolicy" }
+        "relay": { "$ref": "#/$defs/relayOverride" }
       }
     }
   }

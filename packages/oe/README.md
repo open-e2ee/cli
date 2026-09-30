@@ -8,6 +8,10 @@ Run `oe auth login` to log in with a browser and accept the terms for the
 organization. Use `oe sandbox` for the project's Sandbox environment or
 `oe deploy` for Production.
 
+`open-e2ee.config.ts` imports `defineConfig` and the config types from
+`@open-e2ee/oe/config`. `oe` reads the file with Node.js 22.18 or later, and
+the file loads without `node_modules`.
+
 Run `oe help` for every command, its usage, the exit codes, and the environment
 variables. Under a coding agent, or with `--agent yes`, `oe` writes JSON by
 default: each run writes one JSON document to stdout with a stable `code` and,

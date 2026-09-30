@@ -37,7 +37,14 @@ test("stages six native optional packages without a postinstall downloader", asy
       path.join(directory, "artifacts/checksums.txt"),
       "utf8",
     );
-    assert.equal(checksums.trim().split("\n").length, 6);
+    assert.equal(checksums.trim().split("\n").length, 7);
+    const schema = JSON.parse(
+      await readFile(path.join(directory, "artifacts/config-v2.json"), "utf8"),
+    );
+    assert.equal(
+      schema.$id,
+      "https://github.com/open-e2ee/oe/releases/latest/download/config-v2.json",
+    );
 
     const platformPackage = `oe-${process.platform}-${process.arch}`;
     const tarballs = [];
@@ -71,7 +78,7 @@ test("stages six native optional packages without a postinstall downloader", asy
     );
     assert.equal(initialized.status, 0, initialized.stderr);
     assert.match(initialized.stdout, /alice: hello/);
-    await access(path.join(project, "open-e2ee.jsonc"));
+    await access(path.join(project, "open-e2ee.config.ts"));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

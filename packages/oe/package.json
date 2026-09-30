@@ -9,10 +9,15 @@
   },
   "exports": {
     "./bin/oe.js": "./bin/oe.js",
+    "./config": {
+      "types": "./config/index.d.ts",
+      "default": "./config/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "bin",
+    "config",
     "README.md"
   ],
   "optionalDependencies": {
@@ -24,7 +29,7 @@
     "@open-e2ee/oe-win32-x64": "1.0.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
   },
   "repository": {
     "type": "git",

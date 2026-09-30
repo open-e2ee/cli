@@ -20,7 +20,7 @@ node open-e2ee-local.mjs
 
 The initializer needs no login, card, or backend. It writes:
 
-- `open-e2ee.jsonc`, which contains public desired service policy.
+- `open-e2ee.config.ts`, which contains public desired service policy.
 - `open-e2ee-local.mjs`, which runs real protocol and cryptography with the
   SDK's development-only in-memory adapters.
 
@@ -142,8 +142,9 @@ finish. `oe` opens that page in a browser only for a person at a terminal.
 
 ## Configuration ownership
 
-`open-e2ee.jsonc` is public policy. It rejects unknown fields so a secret cannot
-silently remain in the file. Secrets belong in the service secret store. Login
+`open-e2ee.config.ts` is public policy. `oe` evaluates it with Node.js 22.18 or
+later and validates its default export against `schema/config-v2.json`. The
+schema rejects unknown fields so a secret cannot silently remain in the file. Secrets belong in the service secret store. Login
 credentials belong in the operating-system keychain. Protected CI can supply a
 scoped `OE_ACCESS_TOKEN`. The CLI keeps it in memory and never stores it.
 
@@ -156,8 +157,8 @@ Local mutation commands take an advisory project lock. Remote mutations include
 a stable idempotency key. Plans and deploys include the server's expected
 revision. A console-first project or a revision conflict fails closed.
 
-The config records the selected environment. Each selected environment stores one public `relayUrl`. `oe sandbox` writes the
-sandbox value to `.env.local`. `oe deploy` writes the production value to
+The config holds no Relay connection. `oe sandbox` writes the sandbox
+connection to `.env.local`. `oe deploy` writes the production value to
 `.env.production.local`. The commands add both files to `.gitignore`. The application
 does not select a Relay hostname or pair an endpoint with a second key.
 
@@ -224,7 +225,7 @@ The repository also contains a Homebrew formula for the native command.
 
 ## Development
 
-Development needs Go 1.26 or later, Node 20 or later, and npm 11 or later.
+Development needs Go 1.26 or later, Node 22.18 or later, and npm 11 or later.
 
 ```bash
 go test -race ./...

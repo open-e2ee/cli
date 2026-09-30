@@ -126,7 +126,7 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 		}
 	}
 	if !global.environmentExplicit {
-		global.environment = defaultEnvironment(command, dependencies.WorkingDir)
+		global.environment = defaultEnvironment(command)
 	}
 	if err := validateControlURL(global.controlURL); err != nil {
 		return fail(writer, command, args, usageError(command, err.Error()))
@@ -229,7 +229,7 @@ func (r *runner) init(args []string) error {
 		return err
 	}
 	defer lock.Release()
-	if err := config.Write(path, config.New(project)); err != nil {
+	if err := config.Create(path, config.New(project)); err != nil {
 		return err
 	}
 	if err := ensureIgnored(*directory, projectlock.Filename); err != nil {
@@ -338,12 +338,6 @@ func (r *runner) sandbox(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if value.Writer != "config" {
-		return &problem{
-			code: "CONSOLE_WRITER", exit: exitFailure,
-			message: "this project is console-first; change writer mode before oe sandbox can write policy",
-		}
-	}
 	connection, err := envfile.Detect(filepath.Dir(path), "")
 	if err != nil {
 		return err
@@ -366,7 +360,7 @@ func (r *runner) sandbox(ctx context.Context, args []string) error {
 		return err
 	}
 	bootstrap, err := r.api.BootstrapSandbox(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.BootstrapRequest{
-		Policy: policy, ProjectSlug: value.Project, Writer: value.Writer,
+		Policy: policy, ProjectSlug: value.Project, Writer: "config",
 	})
 	if err != nil {
 		return err
@@ -376,13 +370,6 @@ func (r *runner) sandbox(ctx context.Context, args []string) error {
 	}
 	if bootstrap.SandboxRelayURL == "" {
 		return errors.New("control API returned an incomplete sandbox Relay connection")
-	}
-	sandbox := value.Environments["sandbox"]
-	sandbox.RelayURL = bootstrap.SandboxRelayURL
-	value.Environments["sandbox"] = sandbox
-	value.SelectedEnvironment = "sandbox"
-	if err := config.Write(path, value); err != nil {
-		return err
 	}
 	if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", connection.Variable, bootstrap.SandboxRelayURL); err != nil {
 		return err
@@ -426,7 +413,7 @@ func (r *runner) plan(ctx context.Context, args []string) error {
 		return err
 	}
 	plan, err := r.api.Plan(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.PlanRequest{
-		Environment: r.environment, Policy: policy, ProjectSlug: value.Project, Writer: value.Writer,
+		Environment: r.environment, Policy: policy, ProjectSlug: value.Project, Writer: "config",
 	})
 	if err != nil {
 		return err
@@ -475,7 +462,7 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 		return err
 	}
 	plan, err := r.api.Plan(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: planOperation}, control.PlanRequest{
-		Environment: "production", Policy: policy, ProjectSlug: value.Project, Writer: value.Writer,
+		Environment: "production", Policy: policy, ProjectSlug: value.Project, Writer: "config",
 	})
 	if err != nil {
 		return err
@@ -508,20 +495,13 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 	}
 	deployment, err := r.api.Deploy(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.DeployRequest{
 		ExpectedRevision: plan.ExpectedRevision, PlanID: plan.ID, Policy: policy,
-		ProjectSlug: value.Project, Writer: value.Writer,
+		ProjectSlug: value.Project, Writer: "config",
 	})
 	if err != nil {
 		return err
 	}
 	if deployment.RelayURL == "" {
 		return errors.New("control API returned an incomplete production Relay connection")
-	}
-	production := value.Environments["production"]
-	production.RelayURL = deployment.RelayURL
-	value.Environments["production"] = production
-	value.SelectedEnvironment = "production"
-	if err := config.Write(configPath, value); err != nil {
-		return err
 	}
 	if err := writeRelayEnvironment(filepath.Dir(configPath), ".env.production.local", connection.Variable, deployment.RelayURL); err != nil {
 		return err
@@ -554,15 +534,23 @@ func (r *runner) doctor(ctx context.Context, args []string) error {
 		return err
 	}
 	checks := map[string]any{"config": "ok", "control": "ok", "credential": "ok", "relay": "ok", "telemetry": "disabled"}
-	_, value, err := r.loadConfig()
+	path, value, err := r.loadConfig()
 	if err != nil {
 		return fmt.Errorf("doctor found a problem: %w", err)
 	}
-	local := value.Environments[r.environment].RelayURL
+	connection, err := envfile.Detect(filepath.Dir(path), "")
+	if err != nil {
+		return fmt.Errorf("doctor found a problem: %w", err)
+	}
+	environmentFile := environmentFiles[r.environment]
+	local, err := envfile.Read(filepath.Join(filepath.Dir(path), environmentFile), connection.Variable)
+	if err != nil {
+		return fmt.Errorf("doctor found a problem: %w", err)
+	}
 	if local == "" {
 		failure := environmentNotActive(value.Project, r.environment)
 		failure.code = "RELAY_CONNECTION_MISSING"
-		failure.message = fmt.Sprintf("doctor found a problem: the %s Relay connection is not in %s", r.environment, config.Filename)
+		failure.message = fmt.Sprintf("doctor found a problem: the %s Relay connection is not in %s", r.environment, environmentFile)
 		return failure
 	}
 	if err := r.api.Health(ctx); err != nil {
@@ -605,7 +593,7 @@ func (r *runner) doctor(ctx context.Context, args []string) error {
 	origin, _ := url.Parse(local)
 	checks["project"] = value.Project
 	checks["environment"] = r.environment
-	checks["configurationSource"] = config.Filename
+	checks["configurationSource"] = environmentFile
 	checks["relayOrigin"] = origin.Scheme + "://" + origin.Host
 	return r.out.Success("doctor", "All checks passed. CLI telemetry is disabled.", checks)
 }
@@ -658,7 +646,7 @@ func (r *runner) project(ctx context.Context, args []string) error {
 		if flags.NArg() != 1 {
 			return usageError("project", "oe project select needs exactly one PROJECT")
 		}
-		path, value, err := r.loadConfig()
+		path, _, err := r.loadConfig()
 		if err != nil {
 			return err
 		}
@@ -675,30 +663,17 @@ func (r *runner) project(ctx context.Context, args []string) error {
 			return err
 		}
 		defer lock.Release()
-		value.Project = project.Slug
-		value.Writer = project.Writer
-		sandbox := value.Environments["sandbox"]
-		if project.Sandbox != nil {
-			sandbox.RelayURL = project.Sandbox.RelayURL
-		} else {
-			sandbox.RelayURL = ""
-		}
-		value.Environments["sandbox"] = sandbox
-		production := value.Environments["production"]
-		if project.Production != nil {
-			production.RelayURL = project.Production.RelayURL
-		} else {
-			production.RelayURL = ""
-		}
-		value.Environments["production"] = production
-		if err := config.Write(path, value); err != nil {
+		if err := config.Edit(path, config.Change{Path: []string{"project"}, Value: project.Slug}); err != nil {
 			return err
 		}
-		if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", connection.Variable, sandbox.RelayURL); err != nil {
-			return err
-		}
-		if err := writeRelayEnvironment(filepath.Dir(path), ".env.production.local", connection.Variable, production.RelayURL); err != nil {
-			return err
+		for _, environment := range []string{"sandbox", "production"} {
+			relayURL := ""
+			if selected := environmentOf(project, environment); selected != nil {
+				relayURL = selected.RelayURL
+			}
+			if err := writeRelayEnvironment(filepath.Dir(path), environmentFiles[environment], connection.Variable, relayURL); err != nil {
+				return err
+			}
 		}
 		return r.out.Success("project", "Selected project "+project.Slug+".", map[string]any{"project": project.Slug})
 	default:
@@ -707,7 +682,7 @@ func (r *runner) project(ctx context.Context, args []string) error {
 }
 
 // projectArgument returns the PROJECT argument, or the project in
-// open-e2ee.jsonc when the caller names none.
+// open-e2ee.config.ts when the caller names none.
 func (r *runner) projectArgument(command string, args []string) (string, error) {
 	flags := newFlags(command)
 	if err := parseArguments(flags, "project", args); err != nil {
@@ -991,12 +966,6 @@ func (r *runner) deployContext(ctx context.Context, scope string) (config.Config
 	if err != nil {
 		return config.Config{}, control.Project{}, credential.Credential{}, err
 	}
-	if value.Writer != "config" {
-		return config.Config{}, control.Project{}, credential.Credential{}, &problem{
-			code: "CONSOLE_WRITER", exit: exitFailure,
-			message: "this project is console-first; repository deploys are disabled",
-		}
-	}
 	access, err := r.access(ctx, scope, false)
 	if err != nil {
 		return config.Config{}, control.Project{}, credential.Credential{}, err
@@ -1005,8 +974,11 @@ func (r *runner) deployContext(ctx context.Context, scope string) (config.Config
 	if err != nil {
 		return config.Config{}, control.Project{}, credential.Credential{}, err
 	}
-	if project.Writer != value.Writer {
-		return config.Config{}, control.Project{}, credential.Credential{}, errors.New("writer mode drift: server and repository disagree")
+	if project.Writer != "config" {
+		return config.Config{}, control.Project{}, credential.Credential{}, &problem{
+			code: "CONSOLE_WRITER", exit: exitFailure,
+			message: "this project is console-first; repository deploys are disabled",
+		}
 	}
 	return value, project, access, nil
 }
@@ -1035,6 +1007,12 @@ func validatePlan(plan control.Plan, project control.Project, environment string
 }
 
 func controlPolicy(value config.Config, environment string) (control.RelayPolicyRequest, error) {
+	if environment == "production" && value.Environments.Production == nil {
+		return control.RelayPolicyRequest{}, &problem{
+			code: "USAGE_ERROR", exit: exitUsage,
+			message: config.Filename + " has no Production section; add production: {} under environments to opt in to Production",
+		}
+	}
 	policy, err := value.RelayPolicyFor(environment)
 	if err != nil {
 		return control.RelayPolicyRequest{}, err
@@ -1118,6 +1096,9 @@ func (r *runner) loadConfig() (string, config.Config, error) {
 		}
 	}
 	value, err := config.Load(path)
+	if _, ok := errors.AsType[*config.Error](err); ok {
+		return "", config.Config{}, err
+	}
 	if err != nil {
 		return "", config.Config{}, &problem{code: "CONFIG_INVALID", message: err.Error(), exit: exitFailure, cause: err}
 	}
@@ -1198,19 +1179,10 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 	return options, command, rest, failure
 }
 
-func defaultEnvironment(command, directory string) string {
+func defaultEnvironment(command string) string {
 	switch command {
 	case "plan", "deploy":
 		return "production"
-	case "sandbox":
-		return "sandbox"
-	}
-	path, err := config.Find(directory)
-	if err == nil {
-		value, loadErr := config.Load(path)
-		if loadErr == nil {
-			return cmp.Or(value.SelectedEnvironment, "sandbox")
-		}
 	}
 	return "sandbox"
 }
@@ -1344,6 +1316,10 @@ func slug(value string) string {
 	}
 	return strings.Trim(result.String(), "-")
 }
+
+// environmentFiles names the env file that holds each environment's Relay
+// connection.
+var environmentFiles = map[string]string{"sandbox": ".env.local", "production": ".env.production.local"}
 
 // writeRelayEnvironment writes relayURL to filename in the project directory
 // under variable, and keeps the file out of version control.
