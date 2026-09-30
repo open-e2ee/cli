@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -533,8 +534,8 @@ export default`, 1)
 				File: path, Path: strings.Join(test.change.Path, "."),
 				CurrentExpression: test.expression, NewValue: test.change.Value,
 			}
-			if edit, ok := failure.Data["edit"].(ManualEdit); !ok || !reflect.DeepEqual(edit, want) {
-				t.Fatalf("want %#v, got %#v", want, failure.Data["edit"])
+			if edits, ok := failure.Data["edits"].([]ManualEdit); !ok || !reflect.DeepEqual(edits, []ManualEdit{want}) {
+				t.Fatalf("want %#v, got %#v", want, failure.Data["edits"])
 			}
 			requireFile(t, path, source)
 			entries, err := os.ReadDir(filepath.Dir(path))
@@ -542,6 +543,72 @@ export default`, 1)
 				t.Fatalf("an edit that writes nothing leaves no file behind: %v, %v", entries, err)
 			}
 		})
+	}
+}
+
+func TestEditReturnsEveryComputedValue(t *testing.T) {
+	source := strings.Replace(strings.Replace(sample,
+		`project: "secure-chat",`, `project: ["secure", "chat"].join("-"),`, 1),
+		`relay: { deliveryRetention: "1d", attachmentRetention: "1d" },`,
+		`relay: { deliveryRetention: short, attachmentRetention: short },`, 1)
+	source = strings.Replace(source, "export default", "const short = \"1d\";\n\nexport default", 1)
+	path := writeConfig(t, source)
+	changes := []Change{
+		{Path: []string{"project"}, Value: "renamed-chat"},
+		{Path: []string{"relay", "deliveryRetention"}, Value: "7d"},
+		{Path: []string{"environments", "sandbox", "relay"}, Value: map[string]any{"deliveryRetention": "3d", "attachmentRetention": "12h"}},
+	}
+	want := []ManualEdit{
+		{File: path, Path: "project", CurrentExpression: `["secure", "chat"].join("-")`, NewValue: "renamed-chat"},
+		{File: path, Path: "environments.sandbox.relay.deliveryRetention", CurrentExpression: "short", NewValue: "3d"},
+		{File: path, Path: "environments.sandbox.relay.attachmentRetention", CurrentExpression: "short", NewValue: "12h"},
+	}
+	for name, check := range map[string]func(string, ...Change) error{"Edit": Edit, "CheckEdit": CheckEdit} {
+		failure := requireCode(t, check(path, changes...), "CONFIG_EDIT_REQUIRED")
+		edits, _ := failure.Data["edits"].([]ManualEdit)
+		sortEdits := func(edits []ManualEdit) []ManualEdit {
+			edits = slices.Clone(edits)
+			slices.SortFunc(edits, func(a, b ManualEdit) int { return strings.Compare(a.Path, b.Path) })
+			return edits
+		}
+		if !reflect.DeepEqual(sortEdits(edits), sortEdits(want)) {
+			t.Fatalf("%s: want %#v, got %#v", name, want, failure.Data["edits"])
+		}
+		for _, edit := range want {
+			if !strings.Contains(failure.Message, edit.Path) {
+				t.Fatalf("%s: the message does not name %s: %s", name, edit.Path, failure.Message)
+			}
+		}
+		requireFile(t, path, source)
+		if entries, err := os.ReadDir(filepath.Dir(path)); err != nil || len(entries) != 1 {
+			t.Fatalf("%s: an edit that writes nothing leaves no file behind: %v, %v", name, entries, err)
+		}
+	}
+}
+
+func TestCheckEditWritesNothing(t *testing.T) {
+	path := writeConfig(t, sample)
+	if err := CheckEdit(path, Change{Path: []string{"relay", "deliveryRetention"}, Value: "7d"}); err != nil {
+		t.Fatal(err)
+	}
+	requireFile(t, path, sample)
+	if entries, err := os.ReadDir(filepath.Dir(path)); err != nil || len(entries) != 1 {
+		t.Fatalf("CheckEdit left a file behind: %v, %v", entries, err)
+	}
+}
+
+func TestRetentionIsTheInverseOfRetentionSeconds(t *testing.T) {
+	for value := range retentionSeconds {
+		seconds, err := RetentionSeconds(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Retention(seconds); err != nil || got != value {
+			t.Fatalf("Retention(%d) = %q, %v, want %q", seconds, got, err, value)
+		}
+	}
+	if _, err := Retention(90_000); err == nil {
+		t.Fatal("Retention accepted a length that is not a retention value")
 	}
 }
 

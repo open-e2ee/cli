@@ -64,6 +64,9 @@ var commandSurface = []commandSpec{
 		"oe project connection [PROJECT] [--env sandbox|production]",
 		"oe project select PROJECT",
 	}},
+	{"config", "Write the Relay policy of each active environment from the console into open-e2ee.config.ts with the fewest changes. A replaced value needs --yes or a person's answer.", []string{
+		"oe config pull [--env sandbox|production] [--yes] [--dry-run]",
+	}},
 	{"notifications", "Stage and verify best-effort iOS notification profiles.", []string{
 		"oe notifications status [--env sandbox|production]",
 		"oe notifications setup ios [--profile background-only|visible-alert] [--env sandbox|production]",
@@ -83,7 +86,7 @@ var globalFlagSurface = []globalFlagSpec{
 	{"--json", "Write one JSON document to stdout for the result, for success and for failure. oe auth login writes one pending event before it, while a person approves the device."},
 	{"--json-stream", "Write newline-delimited JSON progress events, then one final event, to stdout."},
 	{"--agent yes|no|auto", "Say whether a coding agent runs oe. The default, auto, reads the environment variables that coding agents set. Under an agent, the default output is JSON, and oe never prompts and never opens a browser. --agent no restores text output."},
-	{"--env sandbox|production", "Select the environment. -e is the short form. Without it, doctor, project, and notifications read OE_ENV, then use sandbox. plan and deploy use production."},
+	{"--env sandbox|production", "Select the environment. -e is the short form. Without it, doctor, project, and notifications read OE_ENV, then use sandbox. config pull reads each active environment. plan and deploy use production."},
 	{"--control-url URL", "Use another control API. It must use HTTPS except on loopback."},
 	{"-h, --help", "Show help."},
 }
@@ -100,7 +103,7 @@ var exitCodeSurface = []exitCodeSpec{
 var variableSurface = []variableSpec{
 	{"OE_ACCESS_TOKEN", "A scoped CI credential. The CLI keeps it in memory and never stores it."},
 	{"OE_ACCESS_TOKEN_SCOPES", "The scopes of OE_ACCESS_TOKEN, separated by commas or spaces."},
-	{"OE_ENV", "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, and sandbox ignore it."},
+	{"OE_ENV", "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, sandbox, and config ignore it."},
 	{"OE_OPERATION_ID", "The idempotency key for each remote mutation of one run. Set it only to retry one mutation."},
 }
 

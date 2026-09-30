@@ -51,7 +51,7 @@ type RelayOverride struct {
 }
 
 // Error is a config failure with a stable code. Data holds the field errors
-// of a value that is not valid, or the edit that a person must make.
+// of a value that is not valid, or the edits that a person must make.
 type Error struct {
 	Code    string
 	Message string
@@ -122,6 +122,16 @@ func RetentionSeconds(value string) (int, error) {
 		return 0, errors.New("must be one of 1h, 6h, 12h, 1d, 3d, 7d, 14d, or 30d")
 	}
 	return seconds, nil
+}
+
+// Retention returns the retention value that is seconds long.
+func Retention(seconds int) (string, error) {
+	for value, length := range retentionSeconds {
+		if length == seconds {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("%d seconds is not a retention of 1h, 6h, 12h, 1d, 3d, 7d, 14d, or 30d", seconds)
 }
 
 // New returns the config that oe init writes.
@@ -235,55 +245,12 @@ func sourceOrder(object map[string]any) []string {
 // Edit applies changes to the config file. It replaces only the literals
 // that change and adds each missing section, and it keeps every other byte.
 // When a change reaches a value that the file computes, Edit writes nothing
-// and returns CONFIG_EDIT_REQUIRED with the edit. The new file must load to
-// the current value with the changes applied, or Edit writes nothing.
+// and returns CONFIG_EDIT_REQUIRED with every such edit. The new file must
+// load to the current value with the changes applied, or Edit writes nothing.
 func Edit(path string, changes ...Change) error {
-	current, err := evaluate(path)
-	if err != nil {
+	edit, err := splice(path, changes)
+	if err != nil || edit == nil {
 		return err
-	}
-	var pending []Change
-	for _, change := range changes {
-		change.Value = normalize(change.Value)
-		if !holds(current, change.Path, change.Value) {
-			pending = append(pending, change)
-		}
-	}
-	if len(pending) == 0 {
-		return nil
-	}
-	source, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	request, err := json.Marshal(map[string]any{"source": string(source), "changes": pending})
-	if err != nil {
-		return err
-	}
-	output, err := runScript(filepath.Dir(path), "config-splice.mjs", request)
-	if err != nil {
-		return err
-	}
-	var result struct {
-		Source *string     `json:"source"`
-		Edit   *ManualEdit `json:"edit"`
-	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		return fmt.Errorf("read the edit of %s: %w", Filename, err)
-	}
-	if result.Edit != nil {
-		edit := *result.Edit
-		edit.File = path
-		newValue, _ := json.Marshal(edit.NewValue)
-		return &Error{
-			Code: "CONFIG_EDIT_REQUIRED",
-			Message: fmt.Sprintf("%s computes %s with %s, so oe cannot change it; set it to %s",
-				path, edit.Path, edit.CurrentExpression, newValue),
-			Data: map[string]any{"edit": edit},
-		}
-	}
-	if result.Source == nil {
-		return fmt.Errorf("the edit of %s returned no source", Filename)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -296,7 +263,7 @@ func Edit(path string, changes ...Change) error {
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := writeFile(temporary, []byte(*result.Source), info.Mode().Perm()); err != nil {
+	if err := writeFile(temporary, []byte(edit.source), info.Mode().Perm()); err != nil {
 		return err
 	}
 	edited, err := evaluate(temporaryName)
@@ -306,14 +273,87 @@ func Edit(path string, changes ...Change) error {
 	if _, err := validate(edited); err != nil {
 		return err
 	}
-	want := current
-	for _, change := range pending {
+	want := edit.current
+	for _, change := range edit.changes {
 		want = apply(want, change.Path, change.Value)
 	}
 	if !reflect.DeepEqual(edited, normalize(want)) {
 		return fmt.Errorf("the edit of %s changed more than the named values; the file is unchanged", Filename)
 	}
 	return os.Rename(temporaryName, path)
+}
+
+// CheckEdit returns the error that Edit returns for changes before it writes:
+// CONFIG_EDIT_REQUIRED when a change reaches a value that the file computes.
+// It writes nothing.
+func CheckEdit(path string, changes ...Change) error {
+	_, err := splice(path, changes)
+	return err
+}
+
+// splicedSource is the new text of the config file, the value that the file
+// evaluates to now, and the changes that the new text makes.
+type splicedSource struct {
+	source  string
+	current any
+	changes []Change
+}
+
+// splice returns the new text of the config file with the changes that it
+// does not hold yet, or nil when it holds every change.
+func splice(path string, changes []Change) (*splicedSource, error) {
+	current, err := evaluate(path)
+	if err != nil {
+		return nil, err
+	}
+	var pending []Change
+	for _, change := range changes {
+		change.Value = normalize(change.Value)
+		if !holds(current, change.Path, change.Value) {
+			pending = append(pending, change)
+		}
+	}
+	if len(pending) == 0 {
+		return nil, nil
+	}
+	source, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	request, err := json.Marshal(map[string]any{"source": string(source), "changes": pending})
+	if err != nil {
+		return nil, err
+	}
+	output, err := runScript(filepath.Dir(path), "config-splice.mjs", request)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Source *string      `json:"source"`
+		Edits  []ManualEdit `json:"edits"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return nil, fmt.Errorf("read the edit of %s: %w", Filename, err)
+	}
+	if len(result.Edits) > 0 {
+		steps := make([]string, len(result.Edits))
+		for index := range result.Edits {
+			edit := &result.Edits[index]
+			edit.File = path
+			newValue, _ := json.Marshal(edit.NewValue)
+			steps[index] = fmt.Sprintf("set %s from %s to %s", edit.Path, edit.CurrentExpression, newValue)
+		}
+		return nil, &Error{
+			Code: "CONFIG_EDIT_REQUIRED",
+			Message: fmt.Sprintf("%s computes values that oe cannot change; %s",
+				path, strings.Join(steps, "; ")),
+			Data: map[string]any{"edits": result.Edits},
+		}
+	}
+	if result.Source == nil {
+		return nil, fmt.Errorf("the edit of %s returned no source", Filename)
+	}
+	return &splicedSource{source: *result.Source, current: current, changes: pending}, nil
 }
 
 // holds reports whether current already has value at path. A map value holds

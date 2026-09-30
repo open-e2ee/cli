@@ -32,14 +32,17 @@ func (r *runner) auth(ctx context.Context, args []string) error {
 	}
 }
 
-// envelopeCommand is the command that the output of a run names. An auth
-// command names its verb, such as "auth login".
+// envelopeCommand is the command that the output of a run names. An auth or
+// config command names its verb, such as "auth login".
 func envelopeCommand(command string, args []string) string {
 	if command == "auth" && len(args) > 0 {
 		switch args[0] {
 		case "login", "status", "logout":
 			return "auth " + args[0]
 		}
+	}
+	if command == "config" && len(args) > 0 && args[0] == "pull" {
+		return "config pull"
 	}
 	return command
 }

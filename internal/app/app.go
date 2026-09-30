@@ -197,6 +197,8 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 		return r.doctor(ctx, args)
 	case "project":
 		return r.project(ctx, args)
+	case "config":
+		return r.config(ctx, args)
 	case "notifications":
 		return r.notifications(ctx, args)
 	default:
@@ -653,8 +655,9 @@ func environmentNotActive(project, environment string) *problem {
 	}
 }
 
-// shownEnvironments gives the environments that oe project show reads: the
-// one that --env or OE_ENV names, else both.
+// shownEnvironments gives the environments that oe project show and oe config
+// pull read: the one that --env names, or that OE_ENV names for project, else
+// both.
 func (r *runner) shownEnvironments() []string {
 	if r.environmentSelected {
 		return []string{r.environment}
@@ -1116,7 +1119,8 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 // defaultEnvironment gives the environment of a run without --env. doctor,
 // project, and notifications take OE_ENV, then sandbox. plan and deploy keep
 // Production, and sandbox keeps Sandbox, so a variable left in a shell never
-// changes the target of a deploy.
+// changes the target of a deploy. config ignores OE_ENV, so the variable never
+// narrows a pull.
 func defaultEnvironment(command string, getenv func(string) string) (string, bool, error) {
 	switch command {
 	case "plan", "deploy":
