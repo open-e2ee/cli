@@ -1,4 +1,4 @@
-# `@open-e2ee/cli`
+# `@open-e2ee/oe`
 
 This package installs the `oe` command through an optional native package for
 the current operating system and CPU. It does not download a binary during

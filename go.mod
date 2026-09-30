@@ -1,4 +1,4 @@
-module github.com/open-e2ee/cli
+module github.com/open-e2ee/oe
 
 go 1.26.0
 

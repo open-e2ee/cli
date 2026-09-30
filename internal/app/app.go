@@ -19,14 +19,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/open-e2ee/cli/internal/agent"
-	"github.com/open-e2ee/cli/internal/config"
-	"github.com/open-e2ee/cli/internal/control"
-	"github.com/open-e2ee/cli/internal/credential"
-	"github.com/open-e2ee/cli/internal/envfile"
-	iosnotifications "github.com/open-e2ee/cli/internal/notifications"
-	"github.com/open-e2ee/cli/internal/output"
-	"github.com/open-e2ee/cli/internal/projectlock"
+	"github.com/open-e2ee/oe/internal/agent"
+	"github.com/open-e2ee/oe/internal/config"
+	"github.com/open-e2ee/oe/internal/control"
+	"github.com/open-e2ee/oe/internal/credential"
+	"github.com/open-e2ee/oe/internal/envfile"
+	iosnotifications "github.com/open-e2ee/oe/internal/notifications"
+	"github.com/open-e2ee/oe/internal/output"
+	"github.com/open-e2ee/oe/internal/projectlock"
 )
 
 const defaultControlURL = "https://console.open-e2ee.dev/api/cli"

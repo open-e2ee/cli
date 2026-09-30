@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/open-e2ee/cli/internal/app"
+	"github.com/open-e2ee/oe/internal/app"
 )
 
 var version = "0.0.0-development"

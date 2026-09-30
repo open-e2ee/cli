@@ -12,7 +12,7 @@ const skipRoundtrip = skipIndex !== -1;
 if (skipRoundtrip) args.splice(skipIndex, 1);
 
 const require = createRequire(import.meta.url);
-const oe = require.resolve("@open-e2ee/cli/bin/oe.js");
+const oe = require.resolve("@open-e2ee/oe/bin/oe.js");
 const initialized = spawnSync(process.execPath, [oe, "init", ...args], {
   stdio: "inherit",
 });

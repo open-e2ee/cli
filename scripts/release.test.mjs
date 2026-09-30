@@ -18,18 +18,18 @@ test("stages six native optional packages without a postinstall downloader", asy
     );
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const cli = JSON.parse(
-      await readFile(path.join(directory, "npm/cli/package.json"), "utf8"),
+      await readFile(path.join(directory, "npm/oe/package.json"), "utf8"),
     );
     assert.equal(cli.version, "0.1.0-test.1");
     assert.equal(cli.scripts?.postinstall, undefined);
     assert.equal(Object.keys(cli.optionalDependencies).length, 6);
     for (const target of [
-      "cli-darwin-arm64/bin/oe",
-      "cli-darwin-x64/bin/oe",
-      "cli-linux-arm64/bin/oe",
-      "cli-linux-x64/bin/oe",
-      "cli-win32-arm64/bin/oe.exe",
-      "cli-win32-x64/bin/oe.exe",
+      "oe-darwin-arm64/bin/oe",
+      "oe-darwin-x64/bin/oe",
+      "oe-linux-arm64/bin/oe",
+      "oe-linux-x64/bin/oe",
+      "oe-win32-arm64/bin/oe.exe",
+      "oe-win32-x64/bin/oe.exe",
     ]) {
       await access(path.join(directory, "npm", target));
     }
@@ -39,9 +39,9 @@ test("stages six native optional packages without a postinstall downloader", asy
     );
     assert.equal(checksums.trim().split("\n").length, 6);
 
-    const platformPackage = `cli-${process.platform}-${process.arch}`;
+    const platformPackage = `oe-${process.platform}-${process.arch}`;
     const tarballs = [];
-    for (const packageName of [platformPackage, "cli", "create-oe"]) {
+    for (const packageName of [platformPackage, "oe", "create-oe"]) {
       const packageDirectory = path.join(directory, "npm", packageName);
       const packed = spawnSync("npm", ["pack", "--silent"], {
         cwd: packageDirectory,
@@ -92,7 +92,7 @@ test("npm shim executes an explicitly selected native binary", async () => {
   assert.equal(built.status, 0, built.stderr);
   const result = spawnSync(
     process.execPath,
-    ["packages/cli/bin/oe.js", "--json", "version"],
+    ["packages/oe/bin/oe.js", "--json", "version"],
     {
       cwd: root,
       env: { ...process.env, OE_BINARY_PATH: binary },
