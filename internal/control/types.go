@@ -60,7 +60,7 @@ type Bootstrap struct {
 
 type Activation struct {
 	FirstDevice       bool `json:"firstDevice"`
-	FirstAcknowledged bool `json:"firstAcknowledgedMessage"`
+	FirstAcknowledged bool `json:"firstAcknowledged"`
 }
 
 type PlanRequest struct {
