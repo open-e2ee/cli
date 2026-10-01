@@ -12,6 +12,7 @@ type API interface {
 	Plan(context.Context, CredentialRequest, PlanRequest) (Plan, error)
 	Deploy(context.Context, CredentialRequest, DeployRequest) (Deployment, error)
 	GetProject(context.Context, CredentialRequest, string) (Project, error)
+	ListProjects(context.Context, CredentialRequest) ([]ProjectSummary, error)
 	Notifications(context.Context, CredentialRequest, string, string) (NotificationConfiguration, error)
 	ConfigureNotifications(context.Context, CredentialRequest, string, NotificationConfigurationRequest) (NotificationConfiguration, error)
 	Terms(context.Context, CredentialRequest) (Terms, error)
@@ -113,11 +114,30 @@ type Project struct {
 	Writer     string              `json:"writer"`
 }
 
+// ProjectEnvironment is one environment of a project read. The Production
+// read is always present: State is "active", "available", or "inactive", and
+// BlockedBy names the first gate that stops activation. Only an active
+// environment has a RelayURL and the policy fields.
 type ProjectEnvironment struct {
 	AttachmentRetentionSeconds int    `json:"attachmentRetentionSeconds"`
 	DeliveryTtlSeconds         int    `json:"deliveryTtlSeconds"`
 	RelayURL                   string `json:"relayUrl"`
 	Revision                   string `json:"revision"`
+	State                      string `json:"state,omitempty"`
+	BlockedBy                  string `json:"blockedBy,omitempty"`
+}
+
+// ProjectSummary is one project in the list of the projects that the caller
+// can read.
+type ProjectSummary struct {
+	Slug       string             `json:"slug"`
+	Name       string             `json:"name"`
+	Product    string             `json:"product"`
+	Production ProductionStanding `json:"production"`
+}
+
+type ProductionStanding struct {
+	State string `json:"state"`
 }
 
 type NotificationProfile string

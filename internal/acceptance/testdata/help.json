@@ -41,12 +41,17 @@
         ]
       },
       {
+        "name": "link",
+        "summary": "Link this directory to a Relay project that exists and write the Relay connection of each active environment to its env file. With no config, write open-e2ee.config.ts from the server policy. Without PROJECT, rewrite only the env files.",
+        "usage": ["oe link [PROJECT] [--env-var NAME] [--yes] [--dry-run]"]
+      },
+      {
         "name": "project",
-        "summary": "Read the Relay project, print a Relay connection URL, or select another project.",
+        "summary": "List the Relay projects, read one, or print a Relay connection URL.",
         "usage": [
+          "oe project list",
           "oe project show [PROJECT] [--env sandbox|production]",
-          "oe project connection [PROJECT] [--env sandbox|production]",
-          "oe project select PROJECT"
+          "oe project connection [PROJECT] [--env sandbox|production]"
         ]
       },
       {
