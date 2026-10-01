@@ -46,6 +46,9 @@ type Dependencies struct {
 	// CLI.
 	Interactive func() bool
 	WorkingDir  string
+	// Symlink makes the .claude/skills link of oe agent setup. The default is
+	// os.Symlink.
+	Symlink func(oldname, newname string) error
 }
 
 type runner struct {
@@ -60,6 +63,7 @@ type runner struct {
 	sleep       func(context.Context, time.Duration) error
 	now         func() time.Time
 	getenv      func(string) string
+	symlink     func(oldname, newname string) error
 	directory   string
 	controlURL  string
 	environment string
@@ -118,6 +122,9 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 	if dependencies.HTTP == nil {
 		dependencies.HTTP = &http.Client{Timeout: 20 * time.Second}
 	}
+	if dependencies.Symlink == nil {
+		dependencies.Symlink = os.Symlink
+	}
 	if dependencies.WorkingDir == "" {
 		dependencies.WorkingDir, err = os.Getwd()
 		if err != nil {
@@ -146,7 +153,7 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 		api: api, http: dependencies.HTTP, store: dependencies.Store, in: bufio.NewReader(dependencies.In),
 		interactive: dependencies.Interactive, out: writer, errOut: dependencies.Err,
 		openURL: dependencies.OpenURL, sleep: dependencies.Sleep, now: dependencies.Now,
-		getenv: dependencies.Getenv, directory: dependencies.WorkingDir,
+		getenv: dependencies.Getenv, symlink: dependencies.Symlink, directory: dependencies.WorkingDir,
 		controlURL: global.controlURL, environment: global.environment,
 		environmentSelected: global.environmentSelected, mode: global.mode,
 		underAgent: underAgent, harness: harness,
@@ -205,6 +212,8 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 		return r.project(ctx, args)
 	case "notifications":
 		return r.notifications(ctx, args)
+	case "agent":
+		return r.agent(args)
 	default:
 		return unknownCommand(command)
 	}

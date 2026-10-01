@@ -49,6 +49,9 @@ func envelopeCommand(command string, args []string) string {
 	if command == "config" && len(args) > 0 && (args[0] == "pull" || args[0] == "push") {
 		return "config " + args[0]
 	}
+	if command == "agent" && len(args) > 0 && args[0] == "setup" {
+		return "agent setup"
+	}
 	return command
 }
 
