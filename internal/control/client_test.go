@@ -349,3 +349,48 @@ func TestTermsRefusalsKeepTheDocumentsAndRejectAnUnknownState(t *testing.T) {
 		t.Fatalf("a terms refusal lost its documents: %#v", err)
 	}
 }
+
+func TestProductionStandingDeployBodiesAndCardRefusalMatchTheConsole(t *testing.T) {
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch request.Method + " " + request.URL.Path {
+		case "GET /v1/projects/chat":
+			response.Write([]byte(`{"production":{"blockedBy":"card","canActivate":false,"cardOnFile":false,"state":"inactive"},"sandbox":{"attachmentRetentionSeconds":86400,"deliveryTtlSeconds":86400,"relayUrl":"https://sandbox.example/relay","revision":"2"},"slug":"chat","writer":"config"}`))
+		case "POST /v1/deploys":
+			body, _ := io.ReadAll(request.Body)
+			bodies = append(bodies, string(body))
+			response.WriteHeader(http.StatusConflict)
+			response.Write([]byte(`{"code":"CARD_REQUIRED","message":"Add a card.","billingSetupUrl":"https://console.example/signal-relay/project_chat"}`))
+		default:
+			t.Errorf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client, err := New(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, err := client.GetProject(context.Background(), CredentialRequest{}, "chat")
+	if err != nil || project.Production == nil || project.Production.State != ProductionInactive || project.Production.BlockedBy != BlockedByCard ||
+		project.Production.CardOnFile || project.Production.RelayURL != "" || project.Sandbox.Revision != "2" || project.Sandbox.State != "" {
+		t.Fatalf("project read lost the Production standing: %#v %v", project, err)
+	}
+	policy := RelayPolicyRequest{AttachmentRetentionSeconds: 86_400, DeliveryTtlSeconds: 86_400}
+	for _, request := range []DeployRequest{
+		{Environment: "production", ExpectedRevision: "0", PlanID: "plan_production", Policy: policy, ProjectSlug: "chat", Writer: "config"},
+		{Environment: "sandbox", ExpectedRevision: "2", PlanID: "plan_sandbox", Policy: policy, ProjectSlug: "chat", Writer: "config"},
+	} {
+		_, err = client.Deploy(context.Background(), CredentialRequest{OperationID: "operation"}, request)
+		if refusal, ok := errors.AsType[*APIError](err); !ok || refusal.Code != "CARD_REQUIRED" || refusal.BillingSetupURL != "https://console.example/signal-relay/project_chat" {
+			t.Fatalf("a card refusal lost its setup URL: %#v", err)
+		}
+	}
+	// The console deploy route takes exactly these fields, and environment is
+	// required for both environments.
+	if len(bodies) != 2 ||
+		bodies[0] != `{"environment":"production","expectedRevision":"0","planId":"plan_production","policy":{"attachmentRetentionSeconds":86400,"deliveryTtlSeconds":86400},"project":"chat","writer":"config"}` ||
+		bodies[1] != `{"environment":"sandbox","expectedRevision":"2","planId":"plan_sandbox","policy":{"attachmentRetentionSeconds":86400,"deliveryTtlSeconds":86400},"project":"chat","writer":"config"}` {
+		t.Fatalf("deploy bodies %q", bodies)
+	}
+}

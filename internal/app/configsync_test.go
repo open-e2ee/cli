@@ -1,14 +1,19 @@
 package app
 
 import (
+	"cmp"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-e2ee/oe/internal/config"
 	"github.com/open-e2ee/oe/internal/control"
@@ -382,5 +387,465 @@ func TestPullKeepsTheSectionOfAnInactiveEnvironment(t *testing.T) {
 	}
 	if after := mustRead(t, path); string(after) != string(before) {
 		t.Fatalf("the pull removed or changed the Production section:\n%s", after)
+	}
+}
+
+const cardSetupURL = "https://console.open-e2ee.dev/billing/setup"
+
+// pushConsole keeps one project as the console does. A plan compares the
+// policy with the environment, and a deploy of that plan applies the policy
+// and activates a Production that is not active. It records each call in
+// order, and fail injects a refusal for a call such as "deploy sandbox".
+type pushConsole struct {
+	fakeAPI
+	t        *testing.T
+	project  control.Project
+	terms    control.Terms
+	fail     map[string]error
+	calls    []string
+	deployed map[string]control.DeployRequest
+}
+
+// newPushConsole answers a project whose active Sandbox keeps a 30d policy and
+// whose Production can open on the Free plan now.
+func newPushConsole(t *testing.T, slug string) *pushConsole {
+	sandbox := projectEnvironment(sandboxRelayURL, "3")
+	sandbox.DeliveryTtlSeconds, sandbox.AttachmentRetentionSeconds = 2_592_000, 2_592_000
+	return &pushConsole{
+		t: t, fail: map[string]error{}, deployed: map[string]control.DeployRequest{},
+		terms: control.Terms{State: control.TermsRequired, CanAccept: true},
+		project: control.Project{
+			Slug: slug, Writer: "config", Sandbox: sandbox,
+			Production: &control.ProjectEnvironment{
+				State: control.ProductionAvailable, CanActivate: true, CardOnFile: true,
+			},
+		},
+	}
+}
+
+// activeProduction makes Production active with a policy of seconds.
+func (c *pushConsole) activeProduction(seconds int) {
+	production := projectEnvironment(productionRelayURL, "7")
+	production.DeliveryTtlSeconds, production.AttachmentRetentionSeconds = seconds, seconds
+	production.State, production.CardOnFile = control.ProductionActive, true
+	c.project.Production = production
+}
+
+// blockProduction stops a Production activation at gate.
+func (c *pushConsole) blockProduction(gate string) {
+	c.project.Production.State, c.project.Production.CanActivate = control.ProductionInactive, false
+	c.project.Production.BlockedBy = gate
+	c.project.Production.CardOnFile = gate != control.BlockedByCard
+}
+
+func (c *pushConsole) environment(name string) *control.ProjectEnvironment {
+	return environmentOf(c.project, name)
+}
+
+func (c *pushConsole) GetProject(context.Context, control.CredentialRequest, string) (control.Project, error) {
+	project := c.project
+	sandbox, production := *c.project.Sandbox, *c.project.Production
+	project.Sandbox, project.Production = &sandbox, &production
+	return project, nil
+}
+
+func (c *pushConsole) Plan(_ context.Context, request control.CredentialRequest, plan control.PlanRequest) (control.Plan, error) {
+	c.calls = append(c.calls, "plan "+plan.Environment)
+	if request.OperationID == "" || plan.Writer != "config" || plan.ProjectSlug != c.project.Slug {
+		c.t.Fatalf("plan lost its contract: %#v %#v", request, plan)
+	}
+	if err := c.fail["plan "+plan.Environment]; err != nil {
+		return control.Plan{}, err
+	}
+	current := c.environment(plan.Environment)
+	active := plan.Environment == "sandbox" || current.State == control.ProductionActive
+	result := control.Plan{
+		ID: "plan_" + plan.Environment, ProjectSlug: c.project.Slug, Environment: plan.Environment,
+		ExpectedRevision: cmp.Or(current.Revision, "0"), BillingReady: true, Changes: []control.Change{},
+	}
+	if !active {
+		// The console names the activation with this path.
+		result.Changes = append(result.Changes, control.Change{Path: "production.activation", Before: false, After: true})
+		if !current.CardOnFile {
+			result.BillingReady, result.BillingSetupURL = false, cardSetupURL
+		}
+	}
+	for _, field := range []struct {
+		path          string
+		before, after int
+	}{
+		{"relay.deliveryRetentionSeconds", current.DeliveryTtlSeconds, plan.Policy.DeliveryTtlSeconds},
+		{"relay.attachmentRetentionSeconds", current.AttachmentRetentionSeconds, plan.Policy.AttachmentRetentionSeconds},
+	} {
+		switch {
+		case !active:
+			result.Changes = append(result.Changes, control.Change{Path: field.path, After: field.after})
+		case field.before != field.after:
+			result.Changes = append(result.Changes, control.Change{Path: field.path, Before: field.before, After: field.after})
+		}
+	}
+	return result, nil
+}
+
+func (c *pushConsole) Deploy(_ context.Context, request control.CredentialRequest, deploy control.DeployRequest) (control.Deployment, error) {
+	name := deploy.Environment
+	c.calls = append(c.calls, "deploy "+name)
+	if name != "sandbox" && name != "production" {
+		c.t.Fatalf("deploy named no environment: %#v", deploy)
+	}
+	current := c.environment(name)
+	if request.OperationID == "" || deploy.PlanID != "plan_"+name || deploy.ExpectedRevision != cmp.Or(current.Revision, "0") {
+		c.t.Fatalf("deploy lost its contract: %#v %#v", request, deploy)
+	}
+	if err := c.fail["deploy "+name]; err != nil {
+		return control.Deployment{}, err
+	}
+	c.deployed[name] = deploy
+	revision, _ := strconv.Atoi(current.Revision)
+	current.Revision = strconv.Itoa(revision + 1)
+	current.DeliveryTtlSeconds = deploy.Policy.DeliveryTtlSeconds
+	current.AttachmentRetentionSeconds = deploy.Policy.AttachmentRetentionSeconds
+	if name == "production" {
+		current.RelayURL, current.State, current.BlockedBy, current.CanActivate = productionRelayURL, control.ProductionActive, "", false
+	}
+	return control.Deployment{ID: "deployment_" + name, Revision: current.Revision, Status: "complete", RelayURL: current.RelayURL}, nil
+}
+
+func (c *pushConsole) Terms(context.Context, control.CredentialRequest) (control.Terms, error) {
+	return c.terms, nil
+}
+
+// pushDependencies runs oe config push in directory against console with a
+// stored session, and fails the test when the run waits or opens a browser.
+func pushDependencies(t *testing.T, console *pushConsole, directory string) Dependencies {
+	store := credential.NewMemory()
+	storeCredential(t, store, "project:read", "deploy:write")
+	return Dependencies{
+		API: console, Store: store, WorkingDir: directory, In: unreadable{t},
+		OpenURL: func(target string) error {
+			t.Errorf("the push opened %s", target)
+			return nil
+		},
+		Sleep: func(context.Context, time.Duration) error {
+			t.Error("the push waited")
+			return errors.New("unexpected wait")
+		},
+	}
+}
+
+// environmentResult is data.environments.<name> of a push.
+func environmentResult(t *testing.T, result event, name string) map[string]any {
+	t.Helper()
+	environments, _ := result.Data["environments"].(map[string]any)
+	entry, _ := environments[name].(map[string]any)
+	return entry
+}
+
+func pushStatus(t *testing.T, result event, name string) string {
+	t.Helper()
+	status, _ := environmentResult(t, result, name)["status"].(string)
+	return status
+}
+
+func TestPushAppliesSandboxThenProduction(t *testing.T) {
+	directory := initializedProject(t, "push-chat")
+	console := newPushConsole(t, "push-chat")
+	exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "config", "push", "--yes")
+	result := decodeEvent(t, []byte(stdout))
+	if exit != 0 || result.Status != "ok" || result.Command != "config push" {
+		t.Fatalf("push failed: exit=%d %s", exit, stdout)
+	}
+	if want := []string{"plan sandbox", "deploy sandbox", "plan production", "deploy production"}; !slices.Equal(console.calls, want) {
+		t.Fatalf("push called %v, want %v", console.calls, want)
+	}
+	if pushStatus(t, result, "sandbox") != "applied" || pushStatus(t, result, "production") != "applied" {
+		t.Fatalf("push did not report both environments as applied: %s", stdout)
+	}
+	if environmentResult(t, result, "production")["activated"] != true || !strings.Contains(result.Message, "Production is active on the Free plan.") {
+		t.Fatalf("push did not report the activation: %s", stdout)
+	}
+	sandbox, production := console.deployed["sandbox"], console.deployed["production"]
+	if sandbox.Environment != "sandbox" || sandbox.Policy.DeliveryTtlSeconds != 86_400 || sandbox.Policy.AttachmentRetentionSeconds != 86_400 {
+		t.Fatalf("the Sandbox deploy did not carry the Sandbox section: %#v", sandbox)
+	}
+	if production.Environment != "production" || production.Policy.DeliveryTtlSeconds != 2_592_000 || production.Policy.AttachmentRetentionSeconds != 2_592_000 {
+		t.Fatalf("the Production deploy did not carry the shared policy: %#v", production)
+	}
+	connection, _ := result.Data["connection"].(map[string]any)
+	if result.Next != "oe doctor --env production" || connection["file"] != ".env.production.local" || connection["variable"] != "OPEN_E2EE_RELAY_URL" {
+		t.Fatalf("push did not hand over the Production connection: %s", stdout)
+	}
+	if strings.Contains(stdout, productionRelayURL) {
+		t.Fatalf("push printed the Production connection URL: %s", stdout)
+	}
+	environment := mustRead(t, filepath.Join(directory, ".env.production.local"))
+	if !strings.Contains(string(environment), "\nOPEN_E2EE_RELAY_URL="+productionRelayURL+"\n") {
+		t.Fatalf(".env.production.local has no Production connection: %q", environment)
+	}
+}
+
+func TestPushWithoutProductionSectionNeverTouchesProduction(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run("active="+strconv.FormatBool(active), func(t *testing.T) {
+			directory := t.TempDir()
+			value := config.New("sandbox-chat")
+			value.Environments.Production = nil
+			if err := config.Create(filepath.Join(directory, config.Filename), value); err != nil {
+				t.Fatal(err)
+			}
+			console := newPushConsole(t, "sandbox-chat")
+			if active {
+				console.activeProduction(2_592_000)
+			}
+			exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "config", "push")
+			result := decodeEvent(t, []byte(stdout))
+			if exit != 0 || !slices.Equal(console.calls, []string{"plan sandbox", "deploy sandbox"}) {
+				t.Fatalf("a push without a Production section called %v: exit=%d %s", console.calls, exit, stdout)
+			}
+			production := environmentResult(t, result, "production")
+			switch {
+			case active && (production["status"] != "skipped" || production["reason"] != "not_in_file"):
+				t.Fatalf("an active Production was not reported as left as it is: %s", stdout)
+			case !active && production != nil:
+				t.Fatalf("a Production that is not active was reported: %s", stdout)
+			}
+			if _, err := os.Stat(filepath.Join(directory, ".env.production.local")); !os.IsNotExist(err) {
+				t.Fatalf("the push wrote the Production connection: %v", err)
+			}
+		})
+	}
+}
+
+func TestPushProductionChangeWithoutYesIsConfirmationRequired(t *testing.T) {
+	directory := initializedProject(t, "consent-chat")
+	console := newPushConsole(t, "consent-chat")
+	exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "config", "push")
+	result := decodeEvent(t, []byte(stdout))
+	if exit != exitUsage || result.Code != "CONFIRMATION_REQUIRED" || result.Next != "oe config push --yes" {
+		t.Fatalf("a Production change without --yes was not CONFIRMATION_REQUIRED: exit=%d %s", exit, stdout)
+	}
+	if !strings.Contains(result.Error, "one of the two Free Production projects") {
+		t.Fatalf("the refusal did not name the Free slot that the activation uses: %s", result.Error)
+	}
+	if pushStatus(t, result, "sandbox") != "applied" || pushStatus(t, result, "production") != "blocked" {
+		t.Fatalf("the refusal did not report Sandbox applied and Production blocked: %s", stdout)
+	}
+	if slices.Contains(console.calls, "deploy production") {
+		t.Fatalf("a Production change without consent reached the deploy: %v", console.calls)
+	}
+}
+
+func TestPushSandboxFailureSkipsProduction(t *testing.T) {
+	directory := initializedProject(t, "conflict-chat")
+	console := newPushConsole(t, "conflict-chat")
+	console.fail["deploy sandbox"] = &control.APIError{Status: 409, Code: "REVISION_CONFLICT", Message: "The project changed."}
+	exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "config", "push", "--yes")
+	result := decodeEvent(t, []byte(stdout))
+	if exit != exitFailure || result.Code != "REVISION_CONFLICT" {
+		t.Fatalf("a Sandbox failure did not fail the push with its code: exit=%d %s", exit, stdout)
+	}
+	if !slices.Equal(console.calls, []string{"plan sandbox", "deploy sandbox"}) {
+		t.Fatalf("a Sandbox failure did not stop before Production: %v", console.calls)
+	}
+	production := environmentResult(t, result, "production")
+	if pushStatus(t, result, "sandbox") != "failed" || production["status"] != "skipped" || production["reason"] != "sandbox_not_applied" {
+		t.Fatalf("the push did not report Sandbox failed and Production skipped: %s", stdout)
+	}
+}
+
+func TestPushPartialTakesTheFirstFailingCode(t *testing.T) {
+	directory := initializedProject(t, "partial-chat")
+	console := newPushConsole(t, "partial-chat")
+	console.fail["deploy production"] = &control.APIError{Status: 503, Code: "AUTHORITY_UNAVAILABLE", Message: "The Relay authority is unavailable."}
+	exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "config", "push", "--yes")
+	result := decodeEvent(t, []byte(stdout))
+	if exit != exitTemporary || result.Code != "AUTHORITY_UNAVAILABLE" || result.Next != "oe config push --yes" {
+		t.Fatalf("a partial push did not take the code of Production: exit=%d %s", exit, stdout)
+	}
+	if pushStatus(t, result, "sandbox") != "applied" || pushStatus(t, result, "production") != "failed" ||
+		environmentResult(t, result, "production")["code"] != "AUTHORITY_UNAVAILABLE" {
+		t.Fatalf("a partial push did not report each environment: %s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(directory, ".env.production.local")); !os.IsNotExist(err) {
+		t.Fatalf("a failed Production deploy wrote the connection: %v", err)
+	}
+}
+
+func TestPushMapsBlockedByToCodes(t *testing.T) {
+	for _, test := range []struct {
+		blockedBy, code, next, actionURL string
+	}{
+		{control.BlockedByBillingPermission, "BILLING_PERMISSION_REQUIRED", "", ""},
+		{control.BlockedByTerms, "TERMS_REQUIRED", "oe auth login --accept-terms", ""},
+		{control.BlockedByFreeProjectLimit, "FREE_PROJECT_LIMIT", "", ""},
+		{control.BlockedByCard, "CARD_REQUIRED", "oe config push --yes", cardSetupURL},
+	} {
+		t.Run(test.blockedBy, func(t *testing.T) {
+			directory := initializedProject(t, "gated-chat")
+			console := newPushConsole(t, "gated-chat")
+			console.blockProduction(test.blockedBy)
+			exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "config", "push", "--yes")
+			result := decodeEvent(t, []byte(stdout))
+			if exit != exitPersonAction || result.Code != test.code || result.Next != test.next || result.Action.URL != test.actionURL {
+				t.Fatalf("blockedBy %s became exit=%d %s", test.blockedBy, exit, stdout)
+			}
+			production := environmentResult(t, result, "production")
+			if pushStatus(t, result, "sandbox") != "applied" || production["status"] != "blocked" || production["code"] != test.code {
+				t.Fatalf("blockedBy %s was not a blocked Production: %s", test.blockedBy, stdout)
+			}
+			if slices.Contains(console.calls, "deploy production") {
+				t.Fatalf("a blocked Production reached the deploy: %v", console.calls)
+			}
+		})
+	}
+}
+
+func TestPushUnderAnAgentWithoutACardExitsFiveWithActionURL(t *testing.T) {
+	directory := initializedProject(t, "agent-card-chat")
+	console := newPushConsole(t, "agent-card-chat")
+	console.blockProduction(control.BlockedByCard)
+	dependencies := pushDependencies(t, console, directory)
+	dependencies.Getenv = environment(map[string]string{"CLAUDECODE": "1"})
+	dependencies.Interactive = terminal
+	exit, stdout, _ := run(t, dependencies, "config", "push", "--yes")
+	result := decodeEvent(t, []byte(stdout))
+	if exit != exitPersonAction || result.Code != "CARD_REQUIRED" || result.Next != "oe config push --yes" {
+		t.Fatalf("an agent push without a card did not exit 5: exit=%d %s", exit, stdout)
+	}
+	if result.Action.URL != cardSetupURL || result.Action.Kind != "browser" || result.Action.Reason != "card" {
+		t.Fatalf("an agent did not get the card page in action: %s", stdout)
+	}
+	if slices.Contains(console.calls, "deploy production") {
+		t.Fatalf("a Production without a card reached the deploy: %v", console.calls)
+	}
+}
+
+func TestPushPersonWaitsForTheCard(t *testing.T) {
+	directory := initializedProject(t, "person-card-chat")
+	console := newPushConsole(t, "person-card-chat")
+	console.blockProduction(control.BlockedByCard)
+	browser := &opener{}
+	dependencies := pushDependencies(t, console, directory)
+	dependencies.In, dependencies.Interactive, dependencies.OpenURL = strings.NewReader("y\n"), terminal, browser.open
+	waits := 0
+	dependencies.Sleep = func(context.Context, time.Duration) error {
+		// The person adds the card during the second wait.
+		if waits++; waits == 2 {
+			console.project.Production.BlockedBy, console.project.Production.CardOnFile = "", true
+		}
+		return nil
+	}
+	exit, stdout, stderr := run(t, dependencies, "config", "push")
+	if exit != 0 || waits != 2 || !slices.Equal(browser.opened, []string{cardSetupURL}) {
+		t.Fatalf("a person did not wait for the card: exit=%d waits=%d opened=%v %q %q", exit, waits, browser.opened, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Waiting for the card") || !strings.Contains(stdout, "Card found.") || !strings.Contains(stdout, "Production is active on the Free plan.") {
+		t.Fatalf("the card wait did not tell the person: %q", stdout)
+	}
+	if !strings.Contains(stderr, "Activate Production on the Free plan") || !strings.Contains(stderr, "[y/N]") {
+		t.Fatalf("the person was not asked to consent after the card: %q", stderr)
+	}
+	if !slices.Contains(console.calls, "deploy production") {
+		t.Fatalf("the push did not activate Production after the card: %v", console.calls)
+	}
+}
+
+func TestPushDryRunWritesNothing(t *testing.T) {
+	directory := initializedProject(t, "dry-chat")
+	before := mustRead(t, filepath.Join(directory, config.Filename))
+	console := newPushConsole(t, "dry-chat")
+	exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "config", "push", "--dry-run")
+	result := decodeEvent(t, []byte(stdout))
+	if exit != 0 || !strings.HasPrefix(result.Message, "Dry run. Nothing changed.") {
+		t.Fatalf("dry run failed: exit=%d %s", exit, stdout)
+	}
+	if !slices.Equal(console.calls, []string{"plan sandbox", "plan production"}) {
+		t.Fatalf("dry run called %v", console.calls)
+	}
+	production := environmentResult(t, result, "production")
+	if pushStatus(t, result, "sandbox") != "planned" || production["status"] != "planned" || production["activation"] != "free" {
+		t.Fatalf("dry run did not report the plan: %s", stdout)
+	}
+	if changes, _ := production["changes"].([]any); len(changes) != 3 {
+		t.Fatalf("dry run did not report the Production changes: %s", stdout)
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != config.Filename || string(mustRead(t, filepath.Join(directory, config.Filename))) != string(before) {
+		t.Fatalf("dry run wrote to the project directory: %v", entries)
+	}
+}
+
+func TestPushNoChangeReportsUnchanged(t *testing.T) {
+	directory := initializedProject(t, "steady-chat")
+	console := newPushConsole(t, "steady-chat")
+	console.project.Sandbox.DeliveryTtlSeconds, console.project.Sandbox.AttachmentRetentionSeconds = 86_400, 86_400
+	console.activeProduction(2_592_000)
+	exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "config", "push")
+	result := decodeEvent(t, []byte(stdout))
+	if exit != 0 || pushStatus(t, result, "sandbox") != "unchanged" || pushStatus(t, result, "production") != "unchanged" || result.Next != "" {
+		t.Fatalf("a push with no change did not report unchanged: exit=%d %s", exit, stdout)
+	}
+	if !slices.Equal(console.calls, []string{"plan sandbox", "plan production"}) {
+		t.Fatalf("a push with no change deployed: %v", console.calls)
+	}
+	if _, err := os.Stat(filepath.Join(directory, ".env.production.local")); !os.IsNotExist(err) {
+		t.Fatalf("a push with no change wrote the Production connection: %v", err)
+	}
+}
+
+func TestPushIgnoresOEEnv(t *testing.T) {
+	for _, selected := range []string{"sandbox", "production"} {
+		directory := initializedProject(t, "variable-chat")
+		console := newPushConsole(t, "variable-chat")
+		dependencies := pushDependencies(t, console, directory)
+		dependencies.Getenv = environment(map[string]string{"OE_ENV": selected})
+		exit, stdout, _ := run(t, dependencies, "--json", "config", "push", "--yes")
+		if exit != 0 || !slices.Equal(console.calls, []string{"plan sandbox", "deploy sandbox", "plan production", "deploy production"}) {
+			t.Fatalf("OE_ENV=%s narrowed the push to %v: exit=%d %s", selected, console.calls, exit, stdout)
+		}
+	}
+	directory := initializedProject(t, "narrow-chat")
+	console := newPushConsole(t, "narrow-chat")
+	exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "--env", "production", "config", "push", "--yes")
+	result := decodeEvent(t, []byte(stdout))
+	if exit != 0 || !slices.Equal(console.calls, []string{"plan production", "deploy production"}) || environmentResult(t, result, "sandbox") != nil {
+		t.Fatalf("--env production did not narrow the push: %v exit=%d %s", console.calls, exit, stdout)
+	}
+}
+
+func TestPushAppliesAComputedValue(t *testing.T) {
+	directory := initializedProject(t, "computed-chat")
+	path := filepath.Join(directory, config.Filename)
+	source := string(mustRead(t, path))
+	computed := strings.Replace(source, "production: {}", `production: { relay: { deliveryRetention: ["3", "d"].join("") as "3d" } }`, 1)
+	if computed == source {
+		t.Fatalf("the config has no Production section to compute: %s", source)
+	}
+	if err := os.WriteFile(path, []byte(computed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	console := newPushConsole(t, "computed-chat")
+	exit, stdout, _ := run(t, pushDependencies(t, console, directory), "--json", "config", "push", "--yes")
+	if exit != 0 {
+		t.Fatalf("a computed value failed the push: exit=%d %s", exit, stdout)
+	}
+	if production := console.deployed["production"]; production.Policy.DeliveryTtlSeconds != 3*86_400 || production.Policy.AttachmentRetentionSeconds != 2_592_000 {
+		t.Fatalf("the push did not apply the computed value: %#v", production.Policy)
+	}
+	if after := string(mustRead(t, path)); after != computed {
+		t.Fatalf("the push changed %s: %q", config.Filename, after)
+	}
+}
+
+func TestDeployAndPlanAreUsageErrorsNamingPushDryRun(t *testing.T) {
+	for _, args := range [][]string{{"plan"}, {"deploy"}, {"deploy", "--confirm"}, {"diff"}} {
+		exit, stdout, _ := run(t, Dependencies{WorkingDir: initializedProject(t, "old-chat")}, append([]string{"--json"}, args...)...)
+		result := decodeEvent(t, []byte(stdout))
+		if exit != exitUsage || result.Code != "USAGE_ERROR" || result.Next != "oe config push --dry-run" || !strings.Contains(result.Error, "oe config push") {
+			t.Fatalf("oe %v was not a usage error that names oe config push --dry-run: exit=%d %s", args, exit, stdout)
+		}
 	}
 }

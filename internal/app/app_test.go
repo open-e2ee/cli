@@ -95,29 +95,19 @@ func TestNewWritesTheNextJSVariable(t *testing.T) {
 	}
 }
 
-func TestDeployAndConnectionNameTheExpoVariable(t *testing.T) {
+func TestPushAndConnectionNameTheExpoVariable(t *testing.T) {
 	directory := initializedProject(t, "expo-chat")
 	if err := os.WriteFile(filepath.Join(directory, "package.json"), []byte(`{"dependencies":{"expo":"55.0.0"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	store := credential.NewMemory()
-	storeCredential(t, store, "deploy:write", "project:read")
-	api := &fakeAPI{
-		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-			return control.Project{Slug: "expo-chat", Writer: "config", Production: projectEnvironment(productionRelayURL, "7")}, nil
-		},
-		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
-			return control.Plan{ID: "plan-1", ProjectSlug: "expo-chat", Environment: "production", ExpectedRevision: "7", BillingReady: true}, nil
-		},
-		deploy: func(context.Context, control.CredentialRequest, control.DeployRequest) (control.Deployment, error) {
-			return control.Deployment{ID: "deployment-1", Revision: "revision-8", Status: "complete", RelayURL: productionRelayURL}, nil
-		},
-	}
-	dependencies := Dependencies{API: api, Store: store, WorkingDir: directory}
-	exit, stdout, _ := run(t, dependencies, "--json", "deploy", "--confirm")
-	deployed := decodeEvent(t, []byte(stdout))
-	if exit != 0 || deployed.Data["variable"] != "EXPO_PUBLIC_OPEN_E2EE_RELAY_URL" || !strings.Contains(deployed.Message, "Install EXPO_PUBLIC_OPEN_E2EE_RELAY_URL from .env.production.local") {
-		t.Fatalf("deploy did not name the Expo variable: %s", stdout)
+	console := newPushConsole(t, "expo-chat")
+	console.activeProduction(86_400)
+	dependencies := pushDependencies(t, console, directory)
+	exit, stdout, _ := run(t, dependencies, "--json", "config", "push", "--yes")
+	pushed := decodeEvent(t, []byte(stdout))
+	connection, _ := pushed.Data["connection"].(map[string]any)
+	if exit != 0 || connection["variable"] != "EXPO_PUBLIC_OPEN_E2EE_RELAY_URL" || !strings.Contains(pushed.Message, "Wrote .env.production.local: EXPO_PUBLIC_OPEN_E2EE_RELAY_URL.") {
+		t.Fatalf("push did not name the Expo variable: %s", stdout)
 	}
 	environment, err := os.ReadFile(filepath.Join(directory, ".env.production.local"))
 	if err != nil || !strings.Contains(string(environment), "\nEXPO_PUBLIC_OPEN_E2EE_RELAY_URL="+productionRelayURL+"\n") {
@@ -148,49 +138,6 @@ func TestUnreadablePackageJSONFailsBeforeRemoteMutation(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(directory, file)); !os.IsNotExist(err) {
 			t.Fatalf("new wrote %s: %v", file, err)
 		}
-	}
-}
-
-func TestDeployRequiresBillingAndExplicitJSONConfirmation(t *testing.T) {
-	directory := initializedProject(t, "production-chat")
-	store := credential.NewMemory()
-	storeCredential(t, store, "deploy:write")
-	deployed := false
-	api := &fakeAPI{
-		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-			return control.Project{Slug: "production-chat", Writer: "config", Production: projectEnvironment(productionRelayURL, "7")}, nil
-		},
-		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
-			return control.Plan{ID: "plan-1", ProjectSlug: "production-chat", Environment: "production", ExpectedRevision: "7", BillingReady: true, Changes: []control.Change{{Path: "relay.deliveryRetentionSeconds"}}}, nil
-		},
-		deploy: func(_ context.Context, request control.CredentialRequest, deployment control.DeployRequest) (control.Deployment, error) {
-			deployed = true
-			if request.OperationID == "" || deployment.ExpectedRevision != "7" || deployment.ProjectSlug != "production-chat" || deployment.Policy.DeliveryTtlSeconds != 2_592_000 {
-				t.Fatalf("deploy lost concurrency contract: %#v %#v", request, deployment)
-			}
-			return control.Deployment{ID: "deployment-1", Revision: "revision-8", Status: "complete", RelayURL: productionRelayURL}, nil
-		},
-	}
-	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--json", "deploy"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit != exitUsage || deployed {
-		t.Fatalf("JSON deploy did not require --confirm: deployed=%v output=%s", deployed, stdout.String())
-	}
-	refusal := decodeEvent(t, stdout.Bytes())
-	if refusal.Code != "CONFIRMATION_REQUIRED" || refusal.Next != "oe deploy --confirm" || refusal.Data["planId"] != "plan-1" {
-		t.Fatalf("confirmation refusal did not name the plan and the next command: %s", stdout.String())
-	}
-	stdout.Reset()
-	exit = Run(context.Background(), []string{"--json", "deploy", "--confirm"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit != 0 || !deployed {
-		t.Fatalf("confirmed deploy failed: deployed=%v output=%s", deployed, stdout.String())
-	}
-	environment, err := os.ReadFile(filepath.Join(directory, ".env.production.local"))
-	if err != nil || !strings.Contains(string(environment), "OPEN_E2EE_RELAY_URL="+productionRelayURL) {
-		t.Fatalf("production environment was not installed: %q %v", environment, err)
-	}
-	if !strings.Contains(stdout.String(), `"configurationFile":".env.production.local"`) || strings.Contains(stdout.String(), productionRelayURL) {
-		t.Fatalf("production handoff was incomplete or exposed the connection: %s", stdout.String())
 	}
 }
 
@@ -277,34 +224,6 @@ func TestNotificationsFilteringRequestDoesNotClaimActivation(t *testing.T) {
 	}
 }
 
-func TestDeployOpensCardSetupBeforeProductionMutation(t *testing.T) {
-	directory := initializedProject(t, "billing-chat")
-	store := credential.NewMemory()
-	storeCredential(t, store, "deploy:write")
-	var opened string
-	api := &fakeAPI{
-		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-			return control.Project{Slug: "billing-chat", Writer: "config"}, nil
-		},
-		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
-			return control.Plan{ID: "plan", ProjectSlug: "billing-chat", Environment: "production", ExpectedRevision: "0", BillingSetupURL: "https://billing.example/setup"}, nil
-		},
-	}
-	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--json", "deploy", "--confirm"}, Dependencies{
-		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
-		Interactive: func() bool { return true },
-		OpenURL:     func(target string) error { opened = target; return nil },
-	})
-	if exit == 0 || opened != "https://billing.example/setup" {
-		t.Fatalf("card setup gate did not stop deploy: opened=%q output=%s", opened, stdout.String())
-	}
-	event := decodeEvent(t, stdout.Bytes())
-	if event.Code != "BILLING_SETUP_REQUIRED" || event.Data["billingSetupUrl"] != "https://billing.example/setup" || event.Next != "oe deploy" {
-		t.Fatalf("card setup gate did not hand the setup URL to the caller: %s", stdout.String())
-	}
-}
-
 func TestConsoleWriterFailsBeforeRemoteMutation(t *testing.T) {
 	directory := initializedProject(t, "console-chat")
 	store := credential.NewMemory()
@@ -323,7 +242,7 @@ func TestConsoleWriterFailsBeforeRemoteMutation(t *testing.T) {
 		},
 	}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--json", "deploy", "--confirm"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
+	exit := Run(context.Background(), []string{"--json", "config", "push", "--yes"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
 	if exit == 0 || decodeEvent(t, stdout.Bytes()).Code != "CONSOLE_WRITER" {
 		t.Fatalf("console writer was not rejected: %s", stdout.String())
 	}
@@ -370,7 +289,7 @@ func TestConfigRefusalsKeepTheirCodes(t *testing.T) {
 	}
 }
 
-func TestDeployRefusesAConfigWithoutProduction(t *testing.T) {
+func TestPushToProductionRefusesAConfigWithoutProduction(t *testing.T) {
 	directory := t.TempDir()
 	value := config.New("sandbox-chat")
 	value.Environments.Production = nil
@@ -388,9 +307,9 @@ func TestDeployRefusesAConfigWithoutProduction(t *testing.T) {
 			return control.Plan{}, nil
 		},
 	}
-	exit, stdout, _ := run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "deploy", "--confirm")
+	exit, stdout, _ := run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "--env", "production", "config", "push", "--yes")
 	if refusal := decodeEvent(t, []byte(stdout)); exit != exitUsage || refusal.Code != "USAGE_ERROR" || !strings.Contains(refusal.Error, "has no Production section") {
-		t.Fatalf("deploy without a Production section was not refused: exit=%d %s", exit, stdout)
+		t.Fatalf("a Production push without a Production section was not refused: exit=%d %s", exit, stdout)
 	}
 }
 
