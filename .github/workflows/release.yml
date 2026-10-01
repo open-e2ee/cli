@@ -75,7 +75,7 @@ jobs:
           for package in dist/npm/oe-darwin-* dist/npm/oe-linux-* dist/npm/oe-win32-*; do
             publish_package "$package"
           done
-      - name: Publish command and initializer
+      - name: Publish command
         run: |
           publish_package() {
             package_path="$1"
@@ -87,4 +87,3 @@ jobs:
             fi
           }
           publish_package dist/npm/oe
-          publish_package dist/npm/create-oe

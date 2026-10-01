@@ -5,8 +5,8 @@ the current operating system and CPU. It does not download a binary during
 installation.
 
 Run `oe auth login` to log in with a browser and accept the terms for the
-organization. Use `oe sandbox` for the project's Sandbox environment or
-`oe deploy` for Production.
+organization. Use `oe new` to create a project and its Sandbox environment,
+and `oe deploy` for Production.
 
 `open-e2ee.config.ts` imports `defineConfig` and the config types from
 `@open-e2ee/oe/config`. `oe` reads the file with Node.js 22.18 or later, and

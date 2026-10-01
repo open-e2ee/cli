@@ -5,9 +5,11 @@
   "data": {
     "commands": [
       {
-        "name": "init",
-        "summary": "Write open-e2ee.config.ts and an in-memory example script. Needs no login.",
-        "usage": ["oe init [--directory PATH] [--name PROJECT] [--force]"]
+        "name": "new",
+        "summary": "Create a project and its Sandbox environment, then write open-e2ee.config.ts, the Relay connection in .env.local, and the @open-e2ee/oe devDependency.",
+        "usage": [
+          "oe new [signal-relay] [--project SLUG] [--name NAME] [--env-var NAME] [--dry-run]"
+        ]
       },
       {
         "name": "auth",
@@ -17,11 +19,6 @@
           "oe auth status",
           "oe auth logout"
         ]
-      },
-      {
-        "name": "sandbox",
-        "summary": "Create or update the Sandbox environment, write its Relay connection to .env.local, and wait for the first acknowledged message.",
-        "usage": ["oe sandbox [--timeout DURATION] [--no-wait]"]
       },
       {
         "name": "plan",
@@ -94,7 +91,7 @@
       },
       {
         "name": "OE_ENV",
-        "summary": "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, sandbox, and config ignore it."
+        "summary": "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, new, and config ignore it."
       },
       {
         "name": "OE_OPERATION_ID",

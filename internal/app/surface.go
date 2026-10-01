@@ -39,16 +39,13 @@ const (
 )
 
 var commandSurface = []commandSpec{
-	{"init", "Write open-e2ee.config.ts and an in-memory example script. Needs no login.", []string{
-		"oe init [--directory PATH] [--name PROJECT] [--force]",
+	{"new", "Create a project and its Sandbox environment, then write open-e2ee.config.ts, the Relay connection in .env.local, and the @open-e2ee/oe devDependency.", []string{
+		"oe new [signal-relay] [--project SLUG] [--name NAME] [--env-var NAME] [--dry-run]",
 	}},
 	{"auth", "Log in with a browser and store the session in the OS keychain, then accept the OpenE2EE terms for the organization. Show or remove the session.", []string{
 		"oe auth login [--accept-terms] [--timeout DURATION]",
 		"oe auth status",
 		"oe auth logout",
-	}},
-	{"sandbox", "Create or update the Sandbox environment, write its Relay connection to .env.local, and wait for the first acknowledged message.", []string{
-		"oe sandbox [--timeout DURATION] [--no-wait]",
 	}},
 	{"plan", "Show the Relay policy changes that a deploy applies, without a change.", []string{
 		"oe plan [--env sandbox|production]",
@@ -106,7 +103,7 @@ var exitCodeSurface = []exitCodeSpec{
 var variableSurface = []variableSpec{
 	{"OE_ACCESS_TOKEN", "A scoped CI credential. The CLI keeps it in memory and never stores it."},
 	{"OE_ACCESS_TOKEN_SCOPES", "The scopes of OE_ACCESS_TOKEN, separated by commas or spaces."},
-	{"OE_ENV", "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, sandbox, and config ignore it."},
+	{"OE_ENV", "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, new, and config ignore it."},
 	{"OE_OPERATION_ID", "The idempotency key for each remote mutation of one run. Set it only to retry one mutation."},
 }
 

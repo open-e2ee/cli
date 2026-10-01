@@ -1,40 +1,48 @@
 # OpenE2EE CLI
 
-`oe` initializes OpenE2EE projects, keeps public service policy in a deterministic
+`oe` creates OpenE2EE projects, keeps public service policy in a deterministic
 file, and provides the command boundary for hosted Sandbox and Production.
 
 The OpenE2EE Signal Protocol Relay provides hosted encrypted delivery, built to
 work with the OpenE2EE Signal Protocol SDK. This public repository lets
 developers inspect the command, config, credential, and release contracts.
 
-## Local start
+## Start
 
-Build the command from source:
+Build the command from source, then run it in the application directory:
 
 ```bash
 go build -o ./bin/oe ./cmd/oe
-./bin/oe init --name my-chat
-npm install @open-e2ee/signal-protocol-sdk
-node open-e2ee-local.mjs
+./bin/oe new --project my-chat
+npm install
+./bin/oe doctor --wait
 ```
 
-The initializer needs no login, card, or backend. It writes:
+`oe new` creates the project and its Sandbox environment. It needs a session
+but no card. At a terminal, it starts the login when no session is stored. It
+writes:
 
-- `open-e2ee.config.ts`, which contains public desired service policy.
-- `open-e2ee-local.mjs`, which runs real protocol and cryptography with the
-  SDK's development-only in-memory adapters.
+- `open-e2ee.config.ts`, which contains public desired service policy for
+  Sandbox.
+- `.env.local`, which holds the Sandbox Relay connection.
+- `.open-e2ee.lock` and `.env.local` in `.gitignore`.
+- The `@open-e2ee/oe` devDependency in `package.json`, at the version of the
+  running command, when the directory has a `package.json`.
 
-`npm create oe@latest` initializes the same files and runs the local encrypted
-round trip.
+`oe new` does not run the package manager. Its result names the install
+command. Without `--project`, the project slug comes from the directory name.
+`--dry-run` shows the files that it would change, without a change. A
+directory that already has `open-e2ee.config.ts` fails with `ALREADY_SET_UP`,
+and a slug that the organization already uses fails with `PROJECT_EXISTS`.
+`oe new` never connects a directory to an existing project.
 
 ## Command contract
 
 ```text
-oe init                 initialize public policy and the local encrypted example
+oe new                  create a project and its Sandbox environment, and write the config and its Relay connection
 oe auth login           log in with a browser, store the session in the OS keychain, and accept the terms
 oe auth status          show the user, the organization, the terms state, and the token source
 oe auth logout          remove the stored session
-oe sandbox              create the Sandbox environment, install its Relay connection, and wait for acknowledgement
 oe plan                 show the production configuration change without applying it
 oe deploy               complete the production card gate, deploy, and install its Relay connection
 oe doctor               check project, environment, connection, credentials, and control-plane health; --wait waits for the first acknowledged Sandbox message
@@ -56,7 +64,7 @@ final JSON document, and `oe auth login` emits one pending event before it. `--j
 events. `--agent yes|no|auto` says whether a coding agent runs `oe`.
 `--env sandbox|production` (`-e`) selects the environment. Without it,
 `oe doctor`, `oe project`, and `oe notifications` read `OE_ENV`, then use
-sandbox. `oe sandbox` always uses sandbox, and `oe plan` and `oe deploy` use
+sandbox. `oe new` always uses sandbox, and `oe plan` and `oe deploy` use
 production, whatever `OE_ENV` holds. The config pull reads each active
 environment, or only the one that `--env` names. It ignores `OE_ENV`.
 
@@ -81,7 +89,7 @@ event before the result (see below).
 
 ```json
 {"status":"ok","command":"project","message":"...","data":{}}
-{"status":"error","command":"plan","error":"...","code":"CONFIG_NOT_FOUND","next":"oe init"}
+{"status":"error","command":"plan","error":"...","code":"CONFIG_NOT_FOUND","next":"oe new"}
 ```
 
 Switch on `code`, not on the text of `error`. When `next` is present, it is the
@@ -136,7 +144,7 @@ oe project connection my-chat --env production --json
 In JSON, `data.variable` names the variable that the application reads (see
 [Configuration ownership](#configuration-ownership)). A project with no active
 environment fails with `ENVIRONMENT_NOT_ACTIVE`, and `next` names
-`oe sandbox` or `oe deploy`.
+`oe new` or `oe deploy`.
 
 A production deploy never waits for an answer that no person can give. Without
 a terminal, under an agent, and in JSON and CI modes, `oe deploy` stops with
@@ -177,7 +185,7 @@ computes a value that the pull changes. It then stops with
 value. With `--dry-run`, the pull returns the changes and the edits, and writes
 nothing.
 
-The config holds no Relay connection. `oe sandbox` writes the sandbox
+The config holds no Relay connection. `oe new` writes the sandbox
 connection to `.env.local`. `oe deploy` writes the production value to
 `.env.production.local`. The commands add both files to `.gitignore`. The application
 does not select a Relay hostname or pair an endpoint with a second key.

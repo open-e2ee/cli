@@ -71,73 +71,20 @@ func TestAuthLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 	}
 }
 
-func TestDevBootstrapsWithoutBillingAndWaitsForAcknowledgement(t *testing.T) {
-	directory := initializedProject(t, "managed-chat")
-	store := credential.NewMemory()
-	storeCredential(t, store, "project:write")
-	activationCalls := 0
-	api := &fakeAPI{
-		bootstrapSandbox: func(_ context.Context, request control.CredentialRequest, bootstrap control.BootstrapRequest) (control.Bootstrap, error) {
-			if request.OperationID == "" {
-				t.Fatal("bootstrap omitted idempotency key")
-			}
-			if bootstrap.Writer != "config" || bootstrap.Policy.DeliveryTtlSeconds != 86_400 || bootstrap.Policy.AttachmentRetentionSeconds != 86_400 {
-				t.Fatalf("unexpected writer %q", bootstrap.Writer)
-			}
-			return control.Bootstrap{
-				ProjectSlug: "managed-chat", Writer: "config", Environment: "sandbox",
-				SandboxRelayURL: sandboxRelayURL,
-			}, nil
-		},
-		activation: func(context.Context, control.CredentialRequest, string) (control.Activation, error) {
-			activationCalls++
-			if activationCalls == 1 {
-				return control.Activation{FirstDevice: true}, nil
-			}
-			return control.Activation{FirstDevice: true, FirstAcknowledged: true}, nil
-		},
-	}
-	source, err := os.ReadFile(filepath.Join(directory, config.Filename))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--env", "sandbox", "--json", "sandbox", "--timeout", "1s"}, Dependencies{
-		API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
-		Sleep: func(context.Context, time.Duration) error { return nil },
-	})
-	if exit != 0 {
-		t.Fatalf("dev failed: %s", stdout.String())
-	}
-	if after, err := os.ReadFile(filepath.Join(directory, config.Filename)); err != nil || !bytes.Equal(after, source) {
-		t.Fatalf("sandbox changed %s: %q %v", config.Filename, after, err)
-	}
-	if _, err := os.Stat(filepath.Join(directory, ".env.production.local")); !os.IsNotExist(err) {
-		t.Fatalf("sandbox wrote the production Relay connection: %v", err)
-	}
-	environment, err := os.ReadFile(filepath.Join(directory, ".env.local"))
-	if err != nil || !strings.Contains(string(environment), "OPEN_E2EE_RELAY_URL="+sandboxRelayURL) {
-		t.Fatalf("sandbox environment was not installed: %q %v", environment, err)
-	}
-	if activationCalls != 2 || !strings.Contains(stdout.String(), "firstAcknowledgedMessage") {
-		t.Fatalf("did not wait for first acknowledgement: calls=%d output=%s", activationCalls, stdout.String())
-	}
-}
-
-func TestSandboxWritesTheNextJSVariable(t *testing.T) {
-	directory := initializedProject(t, "next-chat")
+func TestNewWritesTheNextJSVariable(t *testing.T) {
+	directory := emptyDirectory(t, "next-chat")
 	if err := os.WriteFile(filepath.Join(directory, "package.json"), []byte(`{"dependencies":{"next":"16.0.0"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	store := credential.NewMemory()
 	storeCredential(t, store, "project:write")
 	api := &fakeAPI{bootstrapSandbox: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
-		return control.Bootstrap{ProjectSlug: "next-chat", Writer: "config", Environment: "sandbox", SandboxRelayURL: sandboxRelayURL}, nil
+		return control.Bootstrap{Created: true, ProjectSlug: "next-chat", Writer: "config", Environment: "sandbox", SandboxRelayURL: sandboxRelayURL}, nil
 	}}
-	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--json", "sandbox", "--no-wait"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit != 0 {
-		t.Fatalf("sandbox failed: %s", stdout.String())
+	exit, stdout, _ := run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "new")
+	connection, _ := decodeEvent(t, []byte(stdout)).Data["connection"].(map[string]any)
+	if exit != 0 || connection["variable"] != "NEXT_PUBLIC_OPEN_E2EE_RELAY_URL" || connection["framework"] != "Next.js" {
+		t.Fatalf("new did not name the Next.js variable: %s", stdout)
 	}
 	environment, err := os.ReadFile(filepath.Join(directory, ".env.local"))
 	if err != nil {
@@ -183,22 +130,24 @@ func TestDeployAndConnectionNameTheExpoVariable(t *testing.T) {
 }
 
 func TestUnreadablePackageJSONFailsBeforeRemoteMutation(t *testing.T) {
-	directory := initializedProject(t, "broken-chat")
+	directory := emptyDirectory(t, "broken-chat")
 	if err := os.WriteFile(filepath.Join(directory, "package.json"), []byte(`{"dependencies":`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	store := credential.NewMemory()
 	storeCredential(t, store, "project:write")
 	api := &fakeAPI{bootstrapSandbox: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
-		t.Fatal("sandbox changed the server before it could choose the variable")
+		t.Fatal("new changed the server before it could choose the variable")
 		return control.Bootstrap{}, nil
 	}}
-	exit, stdout, _ := run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "sandbox", "--no-wait")
+	exit, stdout, _ := run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "new")
 	if exit == 0 || !strings.Contains(stdout, "package.json") {
-		t.Fatalf("an unreadable package.json did not stop the sandbox: %s", stdout)
+		t.Fatalf("an unreadable package.json did not stop oe new: %s", stdout)
 	}
-	if _, err := os.Stat(filepath.Join(directory, ".env.local")); !os.IsNotExist(err) {
-		t.Fatalf("sandbox wrote .env.local: %v", err)
+	for _, file := range []string{".env.local", config.Filename} {
+		if _, err := os.Stat(filepath.Join(directory, file)); !os.IsNotExist(err) {
+			t.Fatalf("new wrote %s: %v", file, err)
+		}
 	}
 }
 
@@ -487,7 +436,7 @@ func TestValidatePlanRejectsCrossBoundaryResponses(t *testing.T) {
 }
 
 func TestJSONOutputIsOneDocumentAfterAutomaticLogin(t *testing.T) {
-	directory := initializedProject(t, "login-dev")
+	directory := emptyDirectory(t, "login-dev")
 	api := &fakeAPI{
 		startAuthorization: func(context.Context, control.AuthorizationRequest) (control.Authorization, error) {
 			return control.Authorization{DeviceCode: "auth", VerificationURL: "https://login.example", UserCode: "CODE"}, nil
@@ -496,12 +445,13 @@ func TestJSONOutputIsOneDocumentAfterAutomaticLogin(t *testing.T) {
 			return control.Token{AccessToken: "token"}, nil
 		},
 		bootstrapSandbox: func(context.Context, control.CredentialRequest, control.BootstrapRequest) (control.Bootstrap, error) {
-			return control.Bootstrap{ProjectSlug: "login-dev", Writer: "config", Environment: "sandbox", SandboxRelayURL: sandboxRelayURL}, nil
+			return control.Bootstrap{Created: true, ProjectSlug: "login-dev", Writer: "config", Environment: "sandbox", SandboxRelayURL: sandboxRelayURL}, nil
 		},
 	}
 	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--env", "sandbox", "--json", "sandbox", "--no-wait"}, Dependencies{
+	exit := Run(context.Background(), []string{"--json", "new"}, Dependencies{
 		API: api, Store: credential.NewMemory(), Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory,
+		Interactive: terminal, Getenv: environment(nil),
 		OpenURL: func(string) error { return nil }, Sleep: func(context.Context, time.Duration) error { return nil },
 	})
 	if exit != 0 {

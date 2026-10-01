@@ -44,13 +44,19 @@ type Token struct {
 	RetryAfterSeconds int    `json:"-"`
 }
 
+// BootstrapRequest creates the project with its Sandbox environment when the
+// organization has no project with the slug. Name is the display name.
 type BootstrapRequest struct {
+	Name        string             `json:"name,omitempty"`
 	Policy      RelayPolicyRequest `json:"policy"`
 	ProjectSlug string             `json:"project"`
 	Writer      string             `json:"writer"`
 }
 
+// Bootstrap is the answer to a BootstrapRequest. Created is false when the
+// project existed, and then the answer holds no Sandbox connection.
 type Bootstrap struct {
+	Created         bool   `json:"created"`
 	ProjectID       string `json:"projectId"`
 	ProjectSlug     string `json:"project"`
 	Writer          string `json:"writer"`

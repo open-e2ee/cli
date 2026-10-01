@@ -93,14 +93,10 @@ func TestOEEnvSelectsForReads(t *testing.T) {
 	storeCredential(t, store, "project:read", "project:write", "deploy:write")
 	var read []string
 	api := twoEnvironments(&read)
-	var planned, bootstrapped string
+	var planned string
 	api.plan = func(_ context.Context, _ control.CredentialRequest, request control.PlanRequest) (control.Plan, error) {
 		planned = request.Environment
 		return control.Plan{ID: "plan-1", ProjectSlug: request.ProjectSlug, Environment: request.Environment, ExpectedRevision: "7", BillingReady: true}, nil
-	}
-	api.bootstrapSandbox = func(_ context.Context, _ control.CredentialRequest, request control.BootstrapRequest) (control.Bootstrap, error) {
-		bootstrapped = request.ProjectSlug
-		return control.Bootstrap{ProjectSlug: request.ProjectSlug, Writer: "config", Environment: "sandbox", SandboxRelayURL: sandboxRelayURL}, nil
 	}
 	relay := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.String() != productionRelayURL {
@@ -130,15 +126,11 @@ func TestOEEnvSelectsForReads(t *testing.T) {
 		t.Fatalf("doctor did not read OE_ENV: exit=%d %s", exit, stdout)
 	}
 
-	// A variable left in a shell never changes the target of a deploy or a
-	// Sandbox bootstrap.
+	// A variable left in a shell never changes the target of a deploy.
 	sandbox := production
 	sandbox.Getenv = environment(map[string]string{"OE_ENV": "sandbox"})
 	if exit, stdout, _ := run(t, sandbox, "--json", "plan"); exit != 0 || planned != "production" {
 		t.Fatalf("OE_ENV=sandbox changed the plan environment to %q: %s", planned, stdout)
-	}
-	if exit, stdout, _ := run(t, production, "--json", "sandbox", "--no-wait"); exit != 0 || bootstrapped != "variable-chat" {
-		t.Fatalf("OE_ENV=production stopped oe sandbox: %s", stdout)
 	}
 
 	invalid := production
