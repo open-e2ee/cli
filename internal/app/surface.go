@@ -42,7 +42,7 @@ var commandSurface = []commandSpec{
 	{"new", "Create a project and its Sandbox environment, then write open-e2ee.config.ts, the Relay connection in .env.local, and the @open-e2ee/oe devDependency.", []string{
 		"oe new [signal-relay] [--project SLUG] [--name NAME] [--env-var NAME] [--dry-run]",
 	}},
-	{"auth", "Log in with a browser and store the session in the OS keychain, then accept the OpenE2EE terms for the organization. Show or remove the session.", []string{
+	{"auth", "Log in with a browser and store the session in the OS keychain, then accept the OpenE2EE terms for the organization. In an app directory with no config, a person at a terminal then creates a project, links one, or skips. Show or remove the session.", []string{
 		"oe auth login [--accept-terms] [--timeout DURATION]",
 		"oe auth status",
 		"oe auth logout",

@@ -129,6 +129,13 @@ of the organization must accept, and `--accept-terms` fails with
 `TERMS_REQUIRED`, exit 5, and `data.retry` is the command to run again after the
 acceptance.
 
+After the terms, `next` names the setup step of the directory: `oe new` in a
+directory with a `package.json` and no `open-e2ee.config.ts`, `oe link` in a
+directory that a config sets up, and nothing in other directories. A person at a
+terminal who logs in, in an app directory with no config, chooses to create a
+project with `oe new`, link one with `oe link`, or skip. An agent or a run
+without a terminal gets no prompt, only `next`.
+
 `oe auth status` shows the user, the organization, the terms state, and the
 token source, and exits 4 without a session. Protected CI uses a scoped
 `OE_ACCESS_TOKEN` instead of a login.
