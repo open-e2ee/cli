@@ -597,6 +597,37 @@ func TestCheckEditWritesNothing(t *testing.T) {
 	}
 }
 
+func TestApplyGivesTheValueThatEditWrites(t *testing.T) {
+	value := New("secure-chat")
+	value.Environments.Production = nil
+	path := filepath.Join(t.TempDir(), Filename)
+	if err := Create(path, value); err != nil {
+		t.Fatal(err)
+	}
+	changes := []Change{
+		{Path: []string{"environments", "sandbox", "relay", "deliveryRetention"}, Value: "3d"},
+		{Path: []string{"environments", "production"}, Value: map[string]any{}},
+		{Path: []string{"environments", "production", "relay", "attachmentRetention"}, Value: "7d"},
+	}
+	applied, err := Apply(value, changes...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Edit(path, changes...); err != nil {
+		t.Fatal(err)
+	}
+	edited, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(applied, edited) {
+		t.Fatalf("Apply gave %#v, Edit wrote %#v", applied, edited)
+	}
+	if applied.Environments.Production == nil || applied.Environments.Sandbox.Relay.DeliveryRetention != "3d" {
+		t.Fatalf("Apply did not apply the changes: %#v", applied)
+	}
+}
+
 func TestRetentionIsTheInverseOfRetentionSeconds(t *testing.T) {
 	for value := range retentionSeconds {
 		seconds, err := RetentionSeconds(value)

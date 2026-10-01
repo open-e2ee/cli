@@ -283,6 +283,23 @@ func Edit(path string, changes ...Change) error {
 	return os.Rename(temporaryName, path)
 }
 
+// Apply returns value with changes applied, as Edit applies them to the file.
+func Apply(value Config, changes ...Change) (Config, error) {
+	current := normalize(value)
+	for _, change := range changes {
+		current = apply(current, change.Path, normalize(change.Value))
+	}
+	encoded, err := json.Marshal(current)
+	if err != nil {
+		return Config{}, err
+	}
+	var result Config
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return Config{}, err
+	}
+	return result, nil
+}
+
 // CheckEdit returns the error that Edit returns for changes before it writes:
 // CONFIG_EDIT_REQUIRED when a change reaches a value that the file computes.
 // It writes nothing.

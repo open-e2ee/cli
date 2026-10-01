@@ -59,10 +59,13 @@ var commandSurface = []commandSpec{
 	{"doctor", "Check the config, session, project, and Relay connection of the selected environment. With --wait, then wait for the first acknowledged Sandbox message.", []string{
 		"oe doctor [--env sandbox|production] [--wait] [--timeout DURATION]",
 	}},
-	{"project", "Read the Relay project, print a Relay connection URL, or select another project.", []string{
+	{"link", "Link this directory to a Relay project that exists and write the Relay connection of each active environment to its env file. With no config, write open-e2ee.config.ts from the server policy. Without PROJECT, rewrite only the env files.", []string{
+		"oe link [PROJECT] [--env-var NAME] [--yes] [--dry-run]",
+	}},
+	{"project", "List the Relay projects, read one, or print a Relay connection URL.", []string{
+		"oe project list",
 		"oe project show [PROJECT] [--env sandbox|production]",
 		"oe project connection [PROJECT] [--env sandbox|production]",
-		"oe project select PROJECT",
 	}},
 	{"config", "Write the Relay policy of each active environment from the console into open-e2ee.config.ts with the fewest changes. A replaced value needs --yes or a person's answer.", []string{
 		"oe config pull [--env sandbox|production] [--yes] [--dry-run]",

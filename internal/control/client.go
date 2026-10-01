@@ -316,6 +316,12 @@ func (c *Client) GetProject(ctx context.Context, credential CredentialRequest, p
 	return response, err
 }
 
+func (c *Client) ListProjects(ctx context.Context, credential CredentialRequest) ([]ProjectSummary, error) {
+	response := []ProjectSummary{}
+	err := c.do(ctx, http.MethodGet, "/v1/projects", credential, nil, &response)
+	return response, err
+}
+
 func (c *Client) Notifications(ctx context.Context, credential CredentialRequest, project, environment string) (NotificationConfiguration, error) {
 	var response NotificationConfiguration
 	endpoint := projectPath(project, "notifications") + "?environment=" + url.QueryEscape(environment)

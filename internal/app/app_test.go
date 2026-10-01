@@ -400,7 +400,7 @@ func TestConfigRefusalsKeepTheirCodes(t *testing.T) {
 	api := &fakeAPI{getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
 		return control.Project{Slug: "new-chat", Writer: "config"}, nil
 	}}
-	exit, stdout, _ = run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "project", "select", "new-chat")
+	exit, stdout, _ = run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "link", "new-chat", "--yes")
 	refusal := decodeEvent(t, []byte(stdout))
 	edits, _ := refusal.Data["edits"].([]any)
 	var edit map[string]any
@@ -442,43 +442,6 @@ func TestDeployRefusesAConfigWithoutProduction(t *testing.T) {
 	exit, stdout, _ := run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "deploy", "--confirm")
 	if refusal := decodeEvent(t, []byte(stdout)); exit != exitUsage || refusal.Code != "USAGE_ERROR" || !strings.Contains(refusal.Error, "has no Production section") {
 		t.Fatalf("deploy without a Production section was not refused: exit=%d %s", exit, stdout)
-	}
-}
-
-func TestProjectSelectionReplacesRelayConnections(t *testing.T) {
-	directory := initializedProject(t, "old-chat")
-	path := filepath.Join(directory, config.Filename)
-	if err := writeRelayEnvironment(directory, ".env.local", envfile.DefaultVariable, "https://sandbox.relay.open-e2ee.dev/signal/v1/connection/old-sandbox"); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeRelayEnvironment(directory, ".env.production.local", envfile.DefaultVariable, "https://relay.open-e2ee.dev/signal/v1/connection/old-production"); err != nil {
-		t.Fatal(err)
-	}
-	store := credential.NewMemory()
-	storeCredential(t, store, "project:read")
-	api := &fakeAPI{getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-		return control.Project{Slug: "new-chat", Writer: "config", Sandbox: projectEnvironment(sandboxRelayURL, "1"), Production: projectEnvironment(productionRelayURL, "1")}, nil
-	}}
-	var stdout bytes.Buffer
-	exit := Run(context.Background(), []string{"--json", "project", "select", "new-chat"}, Dependencies{API: api, Store: store, Out: &stdout, Err: &bytes.Buffer{}, WorkingDir: directory})
-	if exit != 0 {
-		t.Fatalf("project select failed: %s", stdout.String())
-	}
-	selected, err := config.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if selected.Project != "new-chat" {
-		t.Fatalf("project select did not change the project: %#v", selected)
-	}
-	for filename, expected := range map[string]string{
-		".env.local":            sandboxRelayURL,
-		".env.production.local": productionRelayURL,
-	} {
-		contents, err := os.ReadFile(filepath.Join(directory, filename))
-		if err != nil || !strings.Contains(string(contents), "OPEN_E2EE_RELAY_URL="+expected) || strings.Contains(string(contents), "old-") {
-			t.Fatalf("%s did not converge to the selected project: %q %v", filename, contents, err)
-		}
 	}
 }
 
@@ -667,6 +630,7 @@ type fakeAPI struct {
 	plan                   func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error)
 	deploy                 func(context.Context, control.CredentialRequest, control.DeployRequest) (control.Deployment, error)
 	getProject             func(context.Context, control.CredentialRequest, string) (control.Project, error)
+	listProjects           func(context.Context, control.CredentialRequest) ([]control.ProjectSummary, error)
 	notifications          func(context.Context, control.CredentialRequest, string, string) (control.NotificationConfiguration, error)
 	configureNotifications func(context.Context, control.CredentialRequest, string, control.NotificationConfigurationRequest) (control.NotificationConfiguration, error)
 	terms                  func(context.Context, control.CredentialRequest) (control.Terms, error)
@@ -727,6 +691,12 @@ func (f *fakeAPI) GetProject(ctx context.Context, credential control.CredentialR
 		return control.Project{}, errors.New("unexpected GetProject")
 	}
 	return f.getProject(ctx, credential, project)
+}
+func (f *fakeAPI) ListProjects(ctx context.Context, credential control.CredentialRequest) ([]control.ProjectSummary, error) {
+	if f.listProjects == nil {
+		return nil, errors.New("unexpected ListProjects")
+	}
+	return f.listProjects(ctx, credential)
 }
 func (f *fakeAPI) Notifications(ctx context.Context, credential control.CredentialRequest, project, environment string) (control.NotificationConfiguration, error) {
 	if f.notifications == nil {

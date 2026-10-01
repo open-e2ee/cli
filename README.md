@@ -38,9 +38,10 @@ oe sandbox              create the Sandbox environment, install its Relay connec
 oe plan                 show the production configuration change without applying it
 oe deploy               complete the production card gate, deploy, and install its Relay connection
 oe doctor               check project, environment, connection, credentials, and control-plane health; --wait waits for the first acknowledged Sandbox message
+oe link [PROJECT]       link the directory to a project and write the env file of each active environment
+oe project list         list the projects that the session can read, with the state of Production
 oe project show         read a project and the state of each environment
 oe project connection   print the Relay connection URL of one environment
-oe project select       select another project
 oe config pull          write the Relay policy of each active environment into open-e2ee.config.ts
 oe notifications        stage and verify best-effort notification profiles
 oe help [COMMAND]       show every command, or the usage of one command

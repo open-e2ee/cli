@@ -72,7 +72,7 @@ func (r *runner) doctor(ctx context.Context, args []string) error {
 	}
 	if expected != local {
 		return &problem{
-			code: "RELAY_CONNECTION_STALE", exit: exitFailure, next: "oe project select " + value.Project,
+			code: "RELAY_CONNECTION_STALE", exit: exitFailure, next: "oe link",
 			message: fmt.Sprintf("doctor found a problem: the local %s Relay connection is stale or belongs to another project", r.environment),
 		}
 	}

@@ -195,6 +195,8 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 		return r.deploy(ctx, args)
 	case "doctor":
 		return r.doctor(ctx, args)
+	case "link":
+		return r.link(ctx, args)
 	case "project":
 		return r.project(ctx, args)
 	case "config":
@@ -527,9 +529,14 @@ func (r *runner) billingSetupRequired(plan control.Plan, access credential.Crede
 
 func (r *runner) project(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return usageError("project", "name a project command: show, connection, or select")
+		return usageError("project", "name a project command: list, show, or connection")
 	}
 	switch args[0] {
+	case "list":
+		if err := parseFlags(newFlags("project list"), "project", args[1:]); err != nil {
+			return err
+		}
+		return r.projectList(ctx)
 	case "show":
 		slug, err := r.projectArgument("project show", args[1:])
 		if err != nil {
@@ -565,44 +572,6 @@ func (r *runner) project(ctx context.Context, args []string) error {
 			"project": project.Slug, "environment": r.environment,
 			"relayUrl": relayURL, "variable": connection.Variable,
 		})
-	case "select":
-		flags := newFlags("project select")
-		if err := parseArguments(flags, "project", args[1:]); err != nil {
-			return err
-		}
-		if flags.NArg() != 1 {
-			return usageError("project", "oe project select needs exactly one PROJECT")
-		}
-		path, _, err := r.loadConfig()
-		if err != nil {
-			return err
-		}
-		project, err := r.readProject(ctx, flags.Arg(0))
-		if err != nil {
-			return err
-		}
-		connection, err := envfile.Detect(filepath.Dir(path), "")
-		if err != nil {
-			return err
-		}
-		lock, err := projectlock.Acquire(ctx, filepath.Dir(path))
-		if err != nil {
-			return err
-		}
-		defer lock.Release()
-		if err := config.Edit(path, config.Change{Path: []string{"project"}, Value: project.Slug}); err != nil {
-			return err
-		}
-		for _, environment := range []string{"sandbox", "production"} {
-			relayURL := ""
-			if selected := environmentOf(project, environment); selected != nil {
-				relayURL = selected.RelayURL
-			}
-			if err := writeRelayEnvironment(filepath.Dir(path), environmentFiles[environment], connection.Variable, relayURL); err != nil {
-				return err
-			}
-		}
-		return r.out.Success("project", "Selected project "+project.Slug+".", map[string]any{"project": project.Slug})
 	default:
 		return usageError("project", fmt.Sprintf("unknown project command %q", args[0]))
 	}
