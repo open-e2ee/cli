@@ -1,8 +1,10 @@
 package acceptance_test
 
 import (
-	"bytes"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,43 +13,12 @@ import (
 	"testing"
 )
 
-type commandResult struct {
-	Status  string `json:"status"`
-	Command string `json:"command"`
-}
-
-func TestGoldenInitWorkflow(t *testing.T) {
-	t.Parallel()
-
-	root := repositoryRoot(t)
-	project := t.TempDir()
-	command := exec.Command("go", "run", "./cmd/oe", "--json", "init", "--directory", project, "--name", "golden-chat")
-	command.Dir = root
-	command.Env = append(os.Environ(), "OE_TEST_MODE=1")
-
-	var stdout bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stdout
-	if err := command.Run(); err != nil {
-		t.Fatalf("golden init workflow failed: %v\n%s", err, stdout.String())
-	}
-
-	var result commandResult
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		t.Fatalf("decode init result: %v\n%s", err, stdout.String())
-	}
-	if result != (commandResult{Status: "ok", Command: "init"}) {
-		t.Fatalf("unexpected init result: %#v", result)
-	}
-	if _, err := os.Stat(filepath.Join(project, "open-e2ee.config.ts")); err != nil {
-		t.Fatalf("initializer did not write open-e2ee.config.ts: %v", err)
-	}
-}
-
-// TestBuiltBinaryLoadsTheConfig runs the built binary outside the repository,
-// so the config loader can come only from the copy that the binary embeds.
-// doctor reaches RELAY_CONNECTION_MISSING only after the config loads.
-func TestBuiltBinaryLoadsTheConfig(t *testing.T) {
+// TestBuiltBinaryCreatesAProjectAndPassesDoctor runs the built binary
+// outside the repository, so the config loader can come only from the copy
+// that the binary embeds. oe new creates the project against a control API
+// on loopback, and doctor passes only after the written config loads and the
+// written Relay connection matches the project.
+func TestBuiltBinaryCreatesAProjectAndPassesDoctor(t *testing.T) {
 	t.Parallel()
 
 	binary := filepath.Join(t.TempDir(), "oe")
@@ -59,22 +30,40 @@ func TestBuiltBinaryLoadsTheConfig(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build oe: %v\n%s", err, output)
 	}
-	project := t.TempDir()
-	if output, err := exec.Command(binary, "--json", "init", "--directory", project, "--name", "loaded-chat").CombinedOutput(); err != nil {
-		t.Fatalf("init failed: %v\n%s", err, output)
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	relayURL := server.URL + "/signal/v1/connection/pk_sandbox_public"
+	mux.HandleFunc("POST /v1/projects/bootstrap", func(response http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(response, `{"created":true,"project":"loaded-chat","writer":"config","revision":"1","environment":"sandbox","sandboxRelayUrl":%q}`, relayURL)
+	})
+	mux.HandleFunc("GET /v1/health", func(response http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(response, `{"status":"ok"}`)
+	})
+	mux.HandleFunc("GET /v1/projects/loaded-chat", func(response http.ResponseWriter, _ *http.Request) {
+		fmt.Fprintf(response, `{"slug":"loaded-chat","writer":"config","sandbox":{"relayUrl":%q,"revision":"1"}}`, relayURL)
+	})
+	mux.HandleFunc("GET /signal/v1/connection/pk_sandbox_public", func(response http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(response, `{"schemaVersion":1}`)
+	})
+
+	project := filepath.Join(t.TempDir(), "loaded-chat")
+	if err := os.Mkdir(project, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	doctor := exec.Command(binary, "--json", "doctor")
-	doctor.Dir = project
-	output, _ := doctor.Output()
-	var result struct {
-		Code  string `json:"code"`
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(output, &result); err != nil {
-		t.Fatalf("decode doctor result: %v\n%s", err, output)
-	}
-	if result.Code != "RELAY_CONNECTION_MISSING" {
-		t.Fatalf("doctor did not load the config: %#v", result)
+	for _, args := range [][]string{{"new"}, {"doctor"}} {
+		command := exec.Command(binary, append([]string{"--json", "--agent", "no", "--control-url", server.URL}, args...)...)
+		command.Dir = project
+		command.Env = append(os.Environ(), "OE_ACCESS_TOKEN=test-token", "OE_ACCESS_TOKEN_SCOPES=project:write project:read", "OE_ENV=", "OE_OPERATION_ID=")
+		output, err := command.Output()
+		var result struct {
+			Status  string `json:"status"`
+			Command string `json:"command"`
+		}
+		if decodeErr := json.Unmarshal(output, &result); decodeErr != nil || err != nil || result.Status != "ok" || result.Command != args[0] {
+			t.Fatalf("oe %s failed: %v %v\n%s", args[0], err, decodeErr, output)
+		}
 	}
 }
 

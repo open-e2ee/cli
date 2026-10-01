@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -15,7 +14,6 @@ import (
 	"github.com/open-e2ee/oe/internal/agent"
 	"github.com/open-e2ee/oe/internal/control"
 	"github.com/open-e2ee/oe/internal/credential"
-	"github.com/open-e2ee/oe/internal/projectlock"
 )
 
 // TestMain removes the variables that coding agents set, and OE_ENV, so a
@@ -86,7 +84,7 @@ func TestUsageErrorsExitTwoInTheRequestedMode(t *testing.T) {
 		"invalid environment":       {"--json", "--env=stage", "doctor"},
 		"missing subcommand":        {"--json", "project"},
 		"unknown help topic":        {"--json", "help", "bogus"},
-		"sandbox with production":   {"--json", "--env", "production", "sandbox"},
+		"new with production":       {"--json", "--env", "production", "new"},
 		"invalid agent mode":        {"--json", "--agent=maybe", "doctor"},
 		"missing agent mode":        {"doctor", "--json", "--agent"},
 	} {
@@ -111,8 +109,8 @@ func TestTextFailureNamesTheNextCommandOnStandardError(t *testing.T) {
 	if exit != exitFailure || stdout != "" {
 		t.Fatalf("text failure wrote to stdout or exited %d: %q", exit, stdout)
 	}
-	if !strings.Contains(stderr, "error: open-e2ee.config.ts was not found") || !strings.HasSuffix(stderr, "next: oe init\n") {
-		t.Fatalf("text failure did not name oe init: %q", stderr)
+	if !strings.Contains(stderr, "error: open-e2ee.config.ts was not found") || !strings.HasSuffix(stderr, "next: oe new\n") {
+		t.Fatalf("text failure did not name oe new: %q", stderr)
 	}
 }
 
@@ -405,24 +403,6 @@ func TestLogoutRemovesTheStoredSession(t *testing.T) {
 	}
 	if exit, _, _ := run(t, Dependencies{Store: store}, "auth", "logout"); exit != 0 {
 		t.Fatal("a second logout failed")
-	}
-}
-
-func TestInitIgnoresTheLockFile(t *testing.T) {
-	directory := t.TempDir()
-	for range 2 {
-		exit, stdout, _ := run(t, Dependencies{WorkingDir: directory}, "--json", "init", "--force")
-		if exit != 0 {
-			t.Fatalf("init failed: %s", stdout)
-		}
-	}
-	ignored, err := os.ReadFile(filepath.Join(directory, ".gitignore"))
-	if err != nil || strings.Count(string(ignored), projectlock.Filename+"\n") != 1 {
-		t.Fatalf("init did not ignore the lock file once: %q %v", ignored, err)
-	}
-	exit, stdout, _ := run(t, Dependencies{WorkingDir: directory}, "--json", "init")
-	if failure := decodeEvent(t, []byte(stdout)); exit != exitFailure || failure.Code != "CONFIG_EXISTS" || failure.Next != "oe init --force" {
-		t.Fatalf("existing config was not a named conflict: %s", stdout)
 	}
 }
 

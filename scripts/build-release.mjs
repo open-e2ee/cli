@@ -90,15 +90,14 @@ checksums.push(
   `${createHash("sha256").update(schema).digest("hex")}  config-v2.json`,
 );
 
-for (const packageName of ["oe", "create-oe"]) {
-  await cp(
-    path.join(root, "packages", packageName),
-    path.join(output, "npm", packageName),
-    { recursive: true },
-  );
-  const packagePath = path.join(output, "npm", packageName, "package.json");
-  await setPackageVersion(packagePath, version, true);
-}
+await cp(path.join(root, "packages", "oe"), path.join(output, "npm", "oe"), {
+  recursive: true,
+});
+await setPackageVersion(
+  path.join(output, "npm", "oe", "package.json"),
+  version,
+  true,
+);
 
 await writeFile(
   path.join(output, "artifacts", "checksums.txt"),

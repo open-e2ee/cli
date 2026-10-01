@@ -183,12 +183,12 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 			return usageError("version", "version takes no arguments")
 		}
 		return r.out.Success("version", Version, map[string]any{"version": Version})
-	case "init":
-		return r.init(args)
+	case "new":
+		return r.new(ctx, args)
+	case "init", "setup", "create", "sandbox":
+		return r.retired(command)
 	case "auth":
 		return r.auth(ctx, args)
-	case "sandbox":
-		return r.sandbox(ctx, args)
 	case "plan":
 		return r.plan(ctx, args)
 	case "deploy":
@@ -206,52 +206,6 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 	default:
 		return unknownCommand(command)
 	}
-}
-
-func (r *runner) init(args []string) error {
-	flags := newFlags("init")
-	directory := flags.String("directory", r.directory, "project directory")
-	name := flags.String("name", "", "project slug")
-	force := flags.Bool("force", false, "replace an existing config")
-	if err := parseFlags(flags, "init", args); err != nil {
-		return err
-	}
-	project := *name
-	if project == "" {
-		project = slug(filepath.Base(*directory))
-	}
-	path := filepath.Join(*directory, config.Filename)
-	if err := os.MkdirAll(*directory, 0o755); err != nil {
-		return err
-	}
-	if _, err := os.Stat(path); err == nil && !*force {
-		return &problem{
-			code: "CONFIG_EXISTS", message: path + " already exists; use --force to replace it",
-			next: "oe init --force", exit: exitFailure,
-		}
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	lock, err := projectlock.Acquire(context.Background(), *directory)
-	if err != nil {
-		return err
-	}
-	defer lock.Release()
-	if err := config.Create(path, config.New(project)); err != nil {
-		return err
-	}
-	if err := ensureIgnored(*directory, projectlock.Filename); err != nil {
-		return err
-	}
-	quickstart := filepath.Join(*directory, "open-e2ee-local.mjs")
-	if _, err := os.Stat(quickstart); errors.Is(err, os.ErrNotExist) {
-		if err := os.WriteFile(quickstart, []byte(localRoundtrip), 0o644); err != nil {
-			return err
-		}
-	}
-	return r.out.Success("init", "Initialized local OpenE2EE files. No login or credential was used.", map[string]any{
-		"config": path, "project": project, "quickstart": quickstart,
-	})
 }
 
 // interactiveLogin runs the device flow and stores the session. announce shows
@@ -329,71 +283,6 @@ func loginPrompt(authorization control.Authorization) string {
 	return fmt.Sprintf("Open %s and enter code %s.", authorization.VerificationURL, authorization.UserCode)
 }
 
-func (r *runner) sandbox(ctx context.Context, args []string) error {
-	flags := newFlags("sandbox")
-	timeout := flags.Duration("timeout", 30*time.Minute, "first acknowledgement timeout")
-	noWait := flags.Bool("no-wait", false, "do not wait for the first acknowledgement")
-	if err := parseFlags(flags, "sandbox", args); err != nil {
-		return err
-	}
-	if r.environment != "sandbox" {
-		return &problem{
-			code: "USAGE_ERROR", message: "oe sandbox targets the Sandbox environment; use oe deploy for Production",
-			next: "oe deploy", exit: exitUsage,
-		}
-	}
-	path, value, err := r.loadConfig()
-	if err != nil {
-		return err
-	}
-	connection, err := envfile.Detect(filepath.Dir(path), "")
-	if err != nil {
-		return err
-	}
-	lock, err := projectlock.Acquire(ctx, filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer lock.Release()
-	access, err := r.access(ctx, "project:write", true)
-	if err != nil {
-		return err
-	}
-	operation, err := operationID()
-	if err != nil {
-		return err
-	}
-	policy, err := controlPolicy(value, "sandbox")
-	if err != nil {
-		return err
-	}
-	bootstrap, err := r.api.BootstrapSandbox(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.BootstrapRequest{
-		Policy: policy, ProjectSlug: value.Project, Writer: "config",
-	})
-	if err != nil {
-		return err
-	}
-	if bootstrap.Writer != "config" || bootstrap.ProjectSlug != value.Project || bootstrap.Environment != "sandbox" {
-		return errors.New("control API returned a bootstrap for a different project, writer, or environment")
-	}
-	if bootstrap.SandboxRelayURL == "" {
-		return errors.New("control API returned an incomplete sandbox Relay connection")
-	}
-	if err := writeRelayEnvironment(filepath.Dir(path), ".env.local", connection.Variable, bootstrap.SandboxRelayURL); err != nil {
-		return err
-	}
-	_ = r.out.Progress("sandbox", "The Sandbox environment is ready. Connect the first device.", map[string]any{"environment": "sandbox"})
-	if *noWait {
-		return r.out.Success("sandbox", "The Sandbox environment is ready. First-acknowledgement waiting was skipped.", map[string]any{"environment": "sandbox", "waiting": false})
-	}
-	if err := r.waitForFirstMessage(ctx, access, value.Project, *timeout); err != nil {
-		return err
-	}
-	return r.out.Success("sandbox", "The first managed message was acknowledged.", map[string]any{
-		"environment": "sandbox", "firstDevice": true, "firstAcknowledgedMessage": true,
-	})
-}
-
 func (r *runner) plan(ctx context.Context, args []string) error {
 	if err := parseFlags(newFlags("plan"), "plan", args); err != nil {
 		return err
@@ -433,8 +322,8 @@ func (r *runner) deploy(ctx context.Context, args []string) error {
 	}
 	if r.environment != "production" {
 		return &problem{
-			code: "USAGE_ERROR", message: "oe deploy targets Production; use oe sandbox for the Sandbox environment",
-			next: "oe sandbox", exit: exitUsage,
+			code: "USAGE_ERROR", message: "oe deploy targets Production; oe new creates the Sandbox environment",
+			next: "oe deploy", exit: exitUsage,
 		}
 	}
 	value, project, access, err := r.deployContext(ctx, "deploy:write")
@@ -614,7 +503,7 @@ func environmentOf(project control.Project, environment string) *control.Project
 }
 
 func environmentNotActive(project, environment string) *problem {
-	next := "oe sandbox"
+	next := "oe new"
 	if environment == "production" {
 		next = "oe deploy"
 	}
@@ -997,7 +886,7 @@ func (r *runner) loadConfig() (string, config.Config, error) {
 	path, err := config.Find(r.directory)
 	if err != nil {
 		return "", config.Config{}, &problem{
-			code: "CONFIG_NOT_FOUND", exit: exitFailure, next: "oe init", cause: err,
+			code: "CONFIG_NOT_FOUND", exit: exitFailure, next: "oe new", cause: err,
 			message: err.Error() + " in " + r.directory + " or a parent directory",
 		}
 	}
@@ -1087,7 +976,7 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 
 // defaultEnvironment gives the environment of a run without --env. doctor,
 // project, and notifications take OE_ENV, then sandbox. plan and deploy keep
-// Production, and sandbox keeps Sandbox, so a variable left in a shell never
+// Production, and new keeps Sandbox, so a variable left in a shell never
 // changes the target of a deploy. config ignores OE_ENV, so the variable never
 // narrows a pull.
 func defaultEnvironment(command string, getenv func(string) string) (string, bool, error) {
@@ -1303,25 +1192,3 @@ func mustConfigPath(start string) string {
 }
 
 var Version = "0.0.0-development"
-
-const localRoundtrip = `// Real protocol and cryptography; simulated in-memory infrastructure.
-import { createSignalProtocolClient } from "@open-e2ee/signal-protocol-sdk";
-import { inMemoryStore } from "@open-e2ee/signal-protocol-sdk/local/store/memory";
-import { inMemoryRelay } from "@open-e2ee/signal-protocol-sdk/remote/relay/memory";
-
-const relay = inMemoryRelay();
-await relay.registerDevice("alice", { encryptedDeviceName: new ArrayBuffer(0) });
-await relay.registerDevice("bob", { encryptedDeviceName: new ArrayBuffer(0) });
-const alice = await createSignalProtocolClient({ identity: { userId: "alice" }, adapters: { storage: inMemoryStore(), relay } });
-const bob = await createSignalProtocolClient({ identity: { userId: "bob" }, adapters: { storage: inMemoryStore(), relay } });
-const delivered = new Promise((resolve) => {
-  bob.registerHook("onMessageDecrypted", async (message) => {
-    console.log(message.senderId + ": " + message.content);
-    bob.stopRelaySubscription();
-    resolve();
-  });
-});
-await alice.send("bob", "hello");
-bob.startRelaySubscription();
-await delivered;
-`

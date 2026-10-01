@@ -114,7 +114,7 @@ func TestCommandLineQuotesEachArgumentForAShell(t *testing.T) {
 	}{
 		{[]string{"--json", "project", "show", "any-chat"}, "oe --json project show any-chat"},
 		{[]string{"--control-url=https://127.0.0.1:8443/api/cli", "doctor"}, "oe --control-url=https://127.0.0.1:8443/api/cli doctor"},
-		{[]string{"init", "--directory", "/tmp/my app"}, "oe init --directory '/tmp/my app'"},
+		{[]string{"new", "--name", "My app"}, "oe new --name 'My app'"},
 		{[]string{"notifications", "verify", "ios", "--app-bundle", "it's"}, `oe notifications verify ios --app-bundle 'it'\''s'`},
 		{[]string{"doctor", "$(touch pwned)"}, "oe doctor '$(touch pwned)'"},
 		{[]string{"project", "show", ""}, "oe project show ''"},

@@ -48,7 +48,7 @@ test("stages six native optional packages without a postinstall downloader", asy
 
     const platformPackage = `oe-${process.platform}-${process.arch}`;
     const tarballs = [];
-    for (const packageName of [platformPackage, "oe", "create-oe"]) {
+    for (const packageName of [platformPackage, "oe"]) {
       const packageDirectory = path.join(directory, "npm", packageName);
       const packed = spawnSync("npm", ["pack", "--silent"], {
         cwd: packageDirectory,
@@ -64,21 +64,17 @@ test("stages six native optional packages without a postinstall downloader", asy
       { encoding: "utf8" },
     );
     assert.equal(installed.status, 0, installed.stderr);
-    const project = path.join(directory, "project");
-    const initialized = spawnSync(
+    const version = spawnSync(
       process.execPath,
       [
-        path.join(install, "node_modules/create-oe/bin/create-oe.js"),
-        "--directory",
-        project,
-        "--name",
-        "package-chat",
+        path.join(install, "node_modules/@open-e2ee/oe/bin/oe.js"),
+        "--json",
+        "version",
       ],
       { encoding: "utf8" },
     );
-    assert.equal(initialized.status, 0, initialized.stderr);
-    assert.match(initialized.stdout, /alice: hello/);
-    await access(path.join(project, "open-e2ee.config.ts"));
+    assert.equal(version.status, 0, version.stderr);
+    assert.equal(JSON.parse(version.stdout).data.version, "0.1.0-test.1");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

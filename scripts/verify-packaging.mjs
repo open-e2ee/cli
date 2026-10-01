@@ -5,7 +5,6 @@ import path from "node:path";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const required = [
   "packages/oe/package.json",
-  "packages/create-oe/package.json",
   "packages/oe-darwin-arm64/package.json",
   "packages/oe-darwin-x64/package.json",
   "packages/oe-linux-arm64/package.json",
@@ -28,12 +27,8 @@ const cli = JSON.parse(
 const workspace = JSON.parse(
   await readFile(path.join(root, "package.json"), "utf8"),
 );
-const initializer = JSON.parse(
-  await readFile(path.join(root, "packages/create-oe/package.json"), "utf8"),
-);
 const packageNames = [
   "oe",
-  "create-oe",
   "oe-darwin-arm64",
   "oe-darwin-x64",
   "oe-linux-arm64",
@@ -53,19 +48,6 @@ for (const packageName of packageNames) {
       `${manifest.name} version ${manifest.version} does not match workspace ${workspace.version}`,
     );
   }
-}
-if (initializer.dependencies?.["@open-e2ee/oe"] !== workspace.version) {
-  throw new Error("create-oe must depend on the exact coordinated CLI version");
-}
-const sdkVersion =
-  workspace.devDependencies?.["@open-e2ee/signal-protocol-sdk"];
-if (
-  initializer.dependencies?.["@open-e2ee/signal-protocol-sdk"] !==
-  `^${sdkVersion}`
-) {
-  throw new Error(
-    "create-oe and the release workspace must use one SDK release",
-  );
 }
 if (cli.scripts?.postinstall) {
   throw new Error("@open-e2ee/oe must not use a postinstall download");

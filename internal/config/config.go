@@ -134,7 +134,8 @@ func Retention(seconds int) (string, error) {
 	return "", fmt.Errorf("%d seconds is not a retention of 1h, 6h, 12h, 1d, 3d, 7d, 14d, or 30d", seconds)
 }
 
-// New returns the config that oe init writes.
+// New returns the default config of project, with a Sandbox section and an
+// empty Production section.
 func New(project string) Config {
 	return Config{
 		Product: "signal-relay",
