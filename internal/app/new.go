@@ -191,6 +191,7 @@ func (r *runner) new(ctx context.Context, args []string) error {
 	if install != "" {
 		message += fmt.Sprintf(" Run %s to install %s.", install, cliPackage)
 	}
+	message += r.agentSetupHint(directory)
 	return r.out.SuccessNext("new", message, "oe doctor --wait", data)
 }
 

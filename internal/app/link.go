@@ -219,6 +219,7 @@ func (r *runner) link(ctx context.Context, args []string) error {
 			message += fmt.Sprintf(" The app reads %s from %s.", connection.Variable, strings.Join(connected, " and "))
 		}
 	}
+	message += r.agentSetupHint(directory)
 	return r.out.SuccessNext("link", message, "oe doctor", data)
 }
 

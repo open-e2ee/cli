@@ -69,6 +69,9 @@ var commandSurface = []commandSpec{
 		"oe notifications verify ios [--app-bundle PATH] [--env sandbox|production]",
 		"oe notifications apple-filtering-request",
 	}},
+	{"agent", "Install the OpenE2EE skills for coding agents: write .agents/skills/<name> and link .claude/skills/<name> to it, or write a copy when a link fails. The project scope uses the directory of open-e2ee.config.ts, else the working directory, and --scope user uses the home directory. --check reports each skill as current, missing, or changed, and writes nothing.", []string{
+		"oe agent setup [--scope project|user] [--check]",
+	}},
 	{"version", "Print the CLI version.", []string{
 		"oe version",
 	}},
