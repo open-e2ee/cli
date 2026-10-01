@@ -4,8 +4,9 @@
 //
 // It parses the source text and never evaluates it. It replaces only the
 // literals that change and adds each missing property, so every other byte of
-// the file stays. It writes {"source"} with the new text, or {"edit"} when a
-// change reaches a value that is not a literal and a person must make it.
+// the file stays. It writes {"source"} with the new text, or {"edits"} with
+// one entry for each change that reaches a value that is not a literal, which
+// a person must make.
 import module from "node:module";
 import process from "node:process";
 import { fail, requireNode } from "./config-node.mjs";
@@ -53,7 +54,7 @@ function splice(source, changes) {
   const newline = source.includes("\r\n") ? "\r\n" : "\n";
   const root = configObject(file.program);
   if (root.type !== "ObjectExpression") {
-    return blocked([], patch, root);
+    return { edits: [blocked([], patch, root)] };
   }
   const style = {
     newline,
@@ -63,9 +64,10 @@ function splice(source, changes) {
       root.properties.length === 0 || commaAfter(root.properties.at(-1)) !== -1,
   };
   const edits = [];
-  const refusal = patchObject(root, patch, [], edits, style);
-  if (refusal) {
-    return refusal;
+  const refusals = [];
+  patchObject(root, patch, [], edits, refusals, style);
+  if (refusals.length > 0) {
+    return { edits: refusals };
   }
   let output = source;
   for (const edit of edits.sort((a, b) => b.start - a.start)) {
@@ -142,9 +144,9 @@ function splice(source, changes) {
     }
   }
 
-  // patchObject applies patch to the object literal node. It returns the
-  // refusal for the first value that it cannot change.
-  function patchObject(node, patch, path, edits, style) {
+  // patchObject applies patch to the object literal node. It adds a refusal
+  // for each value that it cannot change.
+  function patchObject(node, patch, path, edits, refusals, style) {
     const additions = [];
     for (const [key, value] of Object.entries(patch)) {
       const index = node.properties.findLastIndex(
@@ -156,7 +158,8 @@ function splice(source, changes) {
           (property) => property.type === "SpreadElement" || property.computed,
         );
       if (later) {
-        return blocked([...path, key], value, later);
+        refusals.push(blocked([...path, key], value, later));
+        continue;
       }
       if (index === -1) {
         additions.push([key, value]);
@@ -164,27 +167,29 @@ function splice(source, changes) {
       }
       const property = node.properties[index];
       if (property.kind !== "init" || property.method || property.shorthand) {
-        return blocked(
-          [...path, key],
-          value,
-          property.shorthand ? property.value : property,
+        refusals.push(
+          blocked(
+            [...path, key],
+            value,
+            property.shorthand ? property.value : property,
+          ),
         );
+        continue;
       }
       if (isPlainObject(value) && property.value.type === "ObjectExpression") {
-        const refusal = patchObject(
+        patchObject(
           property.value,
           value,
           [...path, key],
           edits,
+          refusals,
           style,
         );
-        if (refusal) {
-          return refusal;
-        }
         continue;
       }
       if (!isLiteral(property.value)) {
-        return blocked([...path, key], value, property.value);
+        refusals.push(blocked([...path, key], value, property.value));
+        continue;
       }
       if (sameValue(property.value, value)) {
         continue;
@@ -204,7 +209,6 @@ function splice(source, changes) {
     if (additions.length > 0) {
       edits.push(...addProperties(node, additions, style));
     }
-    return undefined;
   }
 
   function addProperties(node, additions, style) {
@@ -342,11 +346,9 @@ function splice(source, changes) {
       value = value[key];
     }
     return {
-      edit: {
-        path: fullPath.join("."),
-        currentExpression: source.slice(node.start, node.end),
-        newValue: value,
-      },
+      path: fullPath.join("."),
+      currentExpression: source.slice(node.start, node.end),
+      newValue: value,
     };
   }
 }

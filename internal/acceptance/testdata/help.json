@@ -50,6 +50,13 @@
         ]
       },
       {
+        "name": "config",
+        "summary": "Write the Relay policy of each active environment from the console into open-e2ee.config.ts with the fewest changes. A replaced value needs --yes or a person's answer.",
+        "usage": [
+          "oe config pull [--env sandbox|production] [--yes] [--dry-run]"
+        ]
+      },
+      {
         "name": "notifications",
         "summary": "Stage and verify best-effort iOS notification profiles.",
         "usage": [
@@ -82,7 +89,7 @@
       },
       {
         "name": "OE_ENV",
-        "summary": "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, and sandbox ignore it."
+        "summary": "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, sandbox, and config ignore it."
       },
       {
         "name": "OE_OPERATION_ID",
@@ -130,7 +137,7 @@
       },
       {
         "name": "--env sandbox|production",
-        "summary": "Select the environment. -e is the short form. Without it, doctor, project, and notifications read OE_ENV, then use sandbox. plan and deploy use production."
+        "summary": "Select the environment. -e is the short form. Without it, doctor, project, and notifications read OE_ENV, then use sandbox. config pull reads each active environment. plan and deploy use production."
       },
       {
         "name": "--control-url URL",

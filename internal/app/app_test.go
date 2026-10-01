@@ -402,7 +402,11 @@ func TestConfigRefusalsKeepTheirCodes(t *testing.T) {
 	}}
 	exit, stdout, _ = run(t, Dependencies{API: api, Store: store, WorkingDir: directory}, "--json", "project", "select", "new-chat")
 	refusal := decodeEvent(t, []byte(stdout))
-	edit, _ := refusal.Data["edit"].(map[string]any)
+	edits, _ := refusal.Data["edits"].([]any)
+	var edit map[string]any
+	if len(edits) == 1 {
+		edit, _ = edits[0].(map[string]any)
+	}
 	if exit != exitPersonAction || refusal.Code != "CONFIG_EDIT_REQUIRED" || edit["path"] != "project" || edit["currentExpression"] != `["old", "chat"].join("-")` || edit["newValue"] != "new-chat" {
 		t.Fatalf("a computed project was not CONFIG_EDIT_REQUIRED with the edit: exit=%d %s", exit, stdout)
 	}

@@ -41,6 +41,7 @@ oe doctor               check project, environment, connection, credentials, and
 oe project show         read a project and the state of each environment
 oe project connection   print the Relay connection URL of one environment
 oe project select       select another project
+oe config pull          write the Relay policy of each active environment into open-e2ee.config.ts
 oe notifications        stage and verify best-effort notification profiles
 oe help [COMMAND]       show every command, or the usage of one command
 ```
@@ -55,7 +56,8 @@ events. `--agent yes|no|auto` says whether a coding agent runs `oe`.
 `--env sandbox|production` (`-e`) selects the environment. Without it,
 `oe doctor`, `oe project`, and `oe notifications` read `OE_ENV`, then use
 sandbox. `oe sandbox` always uses sandbox, and `oe plan` and `oe deploy` use
-production, whatever `OE_ENV` holds.
+production, whatever `OE_ENV` holds. The config pull reads each active
+environment, or only the one that `--env` names. It ignores `OE_ENV`.
 
 ## Use from a coding agent
 
@@ -158,6 +160,21 @@ Each project has one writer mode:
 Local mutation commands take an advisory project lock. Remote mutations include
 a stable idempotency key. Plans and deploys include the server's expected
 revision. A console-first project or a revision conflict fails closed.
+
+`oe config pull` writes the Relay policy of each active environment from the
+console into `open-e2ee.config.ts` with the fewest changes. A value that the
+shared `relay` section already gives stays shared. A different value becomes an
+override in the environment section, and the shared section never changes. The
+pull adds a missing section for an active environment, and it keeps the section
+of an inactive environment. It changes only the values and keeps every comment.
+
+An addition needs no consent. A replaced value needs `--yes` or the answer of a
+person at a terminal. Without them, the pull stops with `CONFIRMATION_REQUIRED`,
+exit 2, and returns the changes in `data`. The pull writes nothing when the file
+computes a value that the pull changes. It then stops with
+`CONFIG_EDIT_REQUIRED`, exit 5, and `data.edits` holds one entry for each such
+value. With `--dry-run`, the pull returns the changes and the edits, and writes
+nothing.
 
 The config holds no Relay connection. `oe sandbox` writes the sandbox
 connection to `.env.local`. `oe deploy` writes the production value to
