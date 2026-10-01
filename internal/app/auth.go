@@ -1,14 +1,19 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/open-e2ee/oe/internal/config"
 	"github.com/open-e2ee/oe/internal/control"
 	"github.com/open-e2ee/oe/internal/credential"
 	"github.com/open-e2ee/oe/internal/output"
@@ -50,7 +55,10 @@ func envelopeCommand(command string, args []string) string {
 // authLogin logs in with the device flow, then runs the terms step. With
 // --accept-terms and a valid session, or with OE_ACCESS_TOKEN, it starts no
 // device flow. A terms state that stays required is not a failure: the login
-// succeeded, and next names the acceptance when the caller may give it.
+// succeeded, and next names the acceptance when the caller may give it. With
+// accepted terms, next names the setup step of the directory. A person at a
+// terminal who logged in, in an app directory with no config, chooses to
+// create a project, link one, or skip.
 func (r *runner) authLogin(ctx context.Context, args []string) error {
 	flags := newFlags("auth login")
 	timeout := flags.Duration("timeout", 5*time.Minute, "login timeout")
@@ -103,8 +111,10 @@ func (r *runner) authLogin(ctx context.Context, args []string) error {
 	switch {
 	case terms.State == control.TermsAccepted && changed:
 		message = append(message, subject+" accepted the OpenE2EE terms.")
+		next = setupNext(r.directory)
 	case terms.State == control.TermsAccepted:
 		message = append(message, subject+" has accepted the OpenE2EE terms.")
+		next = setupNext(r.directory)
 	case terms.CanAccept:
 		message = append(message, subject+" has not accepted the OpenE2EE terms.")
 		data["documents"] = termsDocuments(terms.Documents)
@@ -118,7 +128,55 @@ func (r *runner) authLogin(ctx context.Context, args []string) error {
 	if r.out.Mode() == output.Text && terms.State == control.TermsRequired {
 		text += documentList(terms.Documents)
 	}
+	if loggedIn && next == "oe new" && r.mode == output.Text && r.canPrompt() {
+		return r.offerSetup(ctx, text, data)
+	}
 	return r.out.SuccessNext("auth login", text, next, data)
+}
+
+// setupNext is the setup command for directory after a login: oe link when a
+// config sets it up, oe new when it holds the package.json of an app, and
+// nothing otherwise.
+func setupNext(directory string) string {
+	if _, err := config.Find(directory); err == nil {
+		return "oe link"
+	}
+	if _, err := os.Stat(filepath.Join(directory, "package.json")); err == nil {
+		return "oe new"
+	}
+	return ""
+}
+
+// offerSetup shows the login, then asks the person to create a project, link
+// one, or skip. A create or a link is the oe new or oe link of the run, and a
+// failure names that command, because the login stays done. Any other answer
+// skips.
+func (r *runner) offerSetup(ctx context.Context, login string, data map[string]any) error {
+	if err := r.out.Progress("auth login", login, nil); err != nil {
+		return err
+	}
+	create := "Create a new project"
+	if len(products) == 1 {
+		create = "Create a new " + products[0] + " project"
+	}
+	fmt.Fprintf(r.errOut, "What do you want to do in this directory?\n  1. %s (oe new)\n  2. Link an existing project (oe link)\n  3. Skip\nChoose [1-3]: ", create)
+	answer, err := bufio.NewReader(r.in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	switch strings.ToLower(strings.TrimSpace(answer)) {
+	case "1", "create":
+		if err := r.new(ctx, nil); err != nil {
+			return classify(err, "oe new", r.environment)
+		}
+		return nil
+	case "2", "link":
+		if err := r.link(ctx, nil); err != nil {
+			return classify(err, "oe link", r.environment)
+		}
+		return nil
+	}
+	return r.out.SuccessNext("auth login", "Run oe new to create a project in this directory, or oe link to link a project that exists.", "oe new", data)
 }
 
 // loginSession returns the session for the terms step, and reports whether

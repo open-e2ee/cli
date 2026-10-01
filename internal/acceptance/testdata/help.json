@@ -13,7 +13,7 @@
       },
       {
         "name": "auth",
-        "summary": "Log in with a browser and store the session in the OS keychain, then accept the OpenE2EE terms for the organization. Show or remove the session.",
+        "summary": "Log in with a browser and store the session in the OS keychain, then accept the OpenE2EE terms for the organization. In an app directory with no config, a person at a terminal then creates a project, links one, or skips. Show or remove the session.",
         "usage": [
           "oe auth login [--accept-terms] [--timeout DURATION]",
           "oe auth status",

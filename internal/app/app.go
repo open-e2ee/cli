@@ -140,8 +140,10 @@ func Run(ctx context.Context, args []string, dependencies Dependencies) int {
 			return fail(writer, command, args, global.environment, usageError(command, err.Error()))
 		}
 	}
+	// One buffered reader serves every prompt of the run, so a prompt that
+	// follows another reads the next line and not the buffer of the first.
 	r := &runner{
-		api: api, http: dependencies.HTTP, store: dependencies.Store, in: dependencies.In,
+		api: api, http: dependencies.HTTP, store: dependencies.Store, in: bufio.NewReader(dependencies.In),
 		interactive: dependencies.Interactive, out: writer, errOut: dependencies.Err,
 		openURL: dependencies.OpenURL, sleep: dependencies.Sleep, now: dependencies.Now,
 		getenv: dependencies.Getenv, directory: dependencies.WorkingDir,
