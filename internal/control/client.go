@@ -22,11 +22,12 @@ type Client struct {
 }
 
 type apiError struct {
-	Code      string          `json:"code"`
-	Message   string          `json:"message"`
-	Error     string          `json:"error"`
-	CanAccept bool            `json:"canAccept"`
-	Documents []TermsDocument `json:"documents"`
+	Code            string          `json:"code"`
+	Message         string          `json:"message"`
+	Error           string          `json:"error"`
+	CanAccept       bool            `json:"canAccept"`
+	Documents       []TermsDocument `json:"documents"`
+	BillingSetupURL string          `json:"billingSetupUrl"`
 }
 
 type authConfiguration struct {
@@ -423,13 +424,15 @@ func (e *sanitizedError) Unwrap() error { return e.cause }
 
 // APIError is a control API refusal. Code is the stable value a caller
 // switches on; the console omits it for some refusals. A TERMS_REQUIRED
-// refusal also carries CanAccept and the Documents to accept.
+// refusal also carries CanAccept and the Documents to accept. A CARD_REQUIRED
+// refusal carries the BillingSetupURL where a person adds the card.
 type APIError struct {
-	Status    int
-	Code      string
-	Message   string
-	CanAccept bool
-	Documents []TermsDocument
+	Status          int
+	Code            string
+	Message         string
+	CanAccept       bool
+	Documents       []TermsDocument
+	BillingSetupURL string
 }
 
 func (e *APIError) Error() string { return e.Message }
@@ -450,6 +453,7 @@ func decodeResponse(response *http.Response, output any) error {
 		return &APIError{
 			Status: response.StatusCode, Code: problem.Code, Message: message,
 			CanAccept: problem.CanAccept, Documents: problem.Documents,
+			BillingSetupURL: problem.BillingSetupURL,
 		}
 	}
 	if output == nil || response.StatusCode == http.StatusNoContent {

@@ -21,16 +21,6 @@
         ]
       },
       {
-        "name": "plan",
-        "summary": "Show the Relay policy changes that a deploy applies, without a change.",
-        "usage": ["oe plan [--env sandbox|production]"]
-      },
-      {
-        "name": "deploy",
-        "summary": "Deploy Relay policy to Production and write its Relay connection to .env.production.local.",
-        "usage": ["oe deploy [--confirm]"]
-      },
-      {
         "name": "doctor",
         "summary": "Check the config, session, project, and Relay connection of the selected environment. With --wait, then wait for the first acknowledged Sandbox message.",
         "usage": [
@@ -53,8 +43,9 @@
       },
       {
         "name": "config",
-        "summary": "Write the Relay policy of each active environment from the console into open-e2ee.config.ts with the fewest changes. A replaced value needs --yes or a person's answer.",
+        "summary": "Keep open-e2ee.config.ts and the console in step. push applies the environment sections: Sandbox, then Production when the file has its section. pull writes the Relay policy of each active environment into the file with the fewest changes. A Production change or a replaced value needs --yes or a person's answer. --dry-run changes nothing.",
         "usage": [
+          "oe config push [--env sandbox|production] [--yes] [--dry-run]",
           "oe config pull [--env sandbox|production] [--yes] [--dry-run]"
         ]
       },
@@ -91,7 +82,7 @@
       },
       {
         "name": "OE_ENV",
-        "summary": "The environment of doctor, project, and notifications when --env is not given: sandbox or production. plan, deploy, new, and config ignore it."
+        "summary": "The environment of doctor, project, and notifications when --env is not given: sandbox or production. new and config ignore it."
       },
       {
         "name": "OE_OPERATION_ID",
@@ -139,7 +130,7 @@
       },
       {
         "name": "--env sandbox|production",
-        "summary": "Select the environment. -e is the short form. Without it, doctor, project, and notifications read OE_ENV, then use sandbox. config pull reads each active environment. plan and deploy use production."
+        "summary": "Select the environment. -e is the short form. Without it, doctor, project, and notifications read OE_ENV, then use sandbox. config pull reads each active environment, and config push applies each section of the config; --env narrows either to one."
       },
       {
         "name": "--control-url URL",

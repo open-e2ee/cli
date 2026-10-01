@@ -98,7 +98,9 @@ type Plan struct {
 	BillingSetupURL  string   `json:"billingSetupUrl,omitempty"`
 }
 
+// DeployRequest applies a plan to the environment that the plan names.
 type DeployRequest struct {
+	Environment      string             `json:"environment"`
 	ExpectedRevision string             `json:"expectedRevision"`
 	PlanID           string             `json:"planId"`
 	Policy           RelayPolicyRequest `json:"policy"`
@@ -122,8 +124,9 @@ type Project struct {
 
 // ProjectEnvironment is one environment of a project read. The Production
 // read is always present: State is "active", "available", or "inactive", and
-// BlockedBy names the first gate that stops activation. Only an active
-// environment has a RelayURL and the policy fields.
+// BlockedBy names the first gate that stops activation. CanActivate and
+// CardOnFile are set on Production only. Only an active environment has a
+// RelayURL and the policy fields.
 type ProjectEnvironment struct {
 	AttachmentRetentionSeconds int    `json:"attachmentRetentionSeconds"`
 	DeliveryTtlSeconds         int    `json:"deliveryTtlSeconds"`
@@ -131,7 +134,22 @@ type ProjectEnvironment struct {
 	Revision                   string `json:"revision"`
 	State                      string `json:"state,omitempty"`
 	BlockedBy                  string `json:"blockedBy,omitempty"`
+	CanActivate                bool   `json:"canActivate,omitempty"`
+	CardOnFile                 bool   `json:"cardOnFile,omitempty"`
 }
+
+// Production states and the gates that stop an activation, in the order that
+// the console checks them.
+const (
+	ProductionActive    = "active"
+	ProductionAvailable = "available"
+	ProductionInactive  = "inactive"
+
+	BlockedByBillingPermission = "billing_permission"
+	BlockedByTerms             = "terms"
+	BlockedByFreeProjectLimit  = "free_project_limit"
+	BlockedByCard              = "card"
+)
 
 // ProjectSummary is one project in the list of the projects that the caller
 // can read.

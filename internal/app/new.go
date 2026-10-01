@@ -64,7 +64,7 @@ func (r *runner) new(ctx context.Context, args []string) error {
 	}
 	if r.environment != "sandbox" {
 		return &problem{
-			code: "USAGE_ERROR", message: "oe new creates the Sandbox environment; use oe deploy for Production",
+			code: "USAGE_ERROR", message: "oe new creates the Sandbox environment; use oe config push for Production",
 			next: "oe new", exit: exitUsage,
 		}
 	}

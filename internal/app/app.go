@@ -26,7 +26,6 @@ import (
 	"github.com/open-e2ee/oe/internal/envfile"
 	iosnotifications "github.com/open-e2ee/oe/internal/notifications"
 	"github.com/open-e2ee/oe/internal/output"
-	"github.com/open-e2ee/oe/internal/projectlock"
 )
 
 const defaultControlURL = "https://console.open-e2ee.dev/api/cli"
@@ -189,18 +188,19 @@ func (r *runner) execute(ctx context.Context, command string, args []string) err
 		return r.retired(command)
 	case "auth":
 		return r.auth(ctx, args)
-	case "plan":
-		return r.plan(ctx, args)
-	case "deploy":
-		return r.deploy(ctx, args)
+	case "config":
+		return r.config(ctx, args)
+	case "plan", "deploy", "diff":
+		return &problem{
+			code: "USAGE_ERROR", exit: exitUsage, next: "oe config push --dry-run",
+			message: "oe " + command + " was replaced by oe config push; oe config push --dry-run shows the changes",
+		}
 	case "doctor":
 		return r.doctor(ctx, args)
 	case "link":
 		return r.link(ctx, args)
 	case "project":
 		return r.project(ctx, args)
-	case "config":
-		return r.config(ctx, args)
 	case "notifications":
 		return r.notifications(ctx, args)
 	default:
@@ -281,139 +281,6 @@ func (r *runner) announceProgress(authorization control.Authorization) {
 
 func loginPrompt(authorization control.Authorization) string {
 	return fmt.Sprintf("Open %s and enter code %s.", authorization.VerificationURL, authorization.UserCode)
-}
-
-func (r *runner) plan(ctx context.Context, args []string) error {
-	if err := parseFlags(newFlags("plan"), "plan", args); err != nil {
-		return err
-	}
-	value, project, access, err := r.deployContext(ctx, "project:read")
-	if err != nil {
-		return err
-	}
-	policy, err := controlPolicy(value, r.environment)
-	if err != nil {
-		return err
-	}
-	operation, err := operationID()
-	if err != nil {
-		return err
-	}
-	plan, err := r.api.Plan(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.PlanRequest{
-		Environment: r.environment, Policy: policy, ProjectSlug: value.Project, Writer: "config",
-	})
-	if err != nil {
-		return err
-	}
-	if err := validatePlan(plan, project, r.environment); err != nil {
-		return err
-	}
-	return r.out.Success("plan", fmt.Sprintf("Plan %s has %d change(s).", plan.ID, len(plan.Changes)), map[string]any{
-		"planId": plan.ID, "environment": plan.Environment, "changes": plan.Changes,
-		"billingReady": plan.BillingReady,
-	})
-}
-
-func (r *runner) deploy(ctx context.Context, args []string) error {
-	flags := newFlags("deploy")
-	confirm := flags.Bool("confirm", false, "confirm the production deploy")
-	if err := parseFlags(flags, "deploy", args); err != nil {
-		return err
-	}
-	if r.environment != "production" {
-		return &problem{
-			code: "USAGE_ERROR", message: "oe deploy targets Production; oe new creates the Sandbox environment",
-			next: "oe deploy", exit: exitUsage,
-		}
-	}
-	value, project, access, err := r.deployContext(ctx, "deploy:write")
-	if err != nil {
-		return err
-	}
-	configPath := mustConfigPath(r.directory)
-	connection, err := envfile.Detect(filepath.Dir(configPath), "")
-	if err != nil {
-		return err
-	}
-	lock, err := projectlock.Acquire(ctx, filepath.Dir(configPath))
-	if err != nil {
-		return err
-	}
-	defer lock.Release()
-	policy, err := controlPolicy(value, "production")
-	if err != nil {
-		return err
-	}
-	planOperation, err := operationID()
-	if err != nil {
-		return err
-	}
-	plan, err := r.api.Plan(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: planOperation}, control.PlanRequest{
-		Environment: "production", Policy: policy, ProjectSlug: value.Project, Writer: "config",
-	})
-	if err != nil {
-		return err
-	}
-	if err := validatePlan(plan, project, "production"); err != nil {
-		return err
-	}
-	if !plan.BillingReady {
-		return r.billingSetupRequired(plan, access)
-	}
-	if !*confirm {
-		if access.Source == "environment" || r.mode != output.Text || !r.canPrompt() {
-			return &problem{
-				code: "CONFIRMATION_REQUIRED", exit: exitUsage, next: "oe deploy --confirm",
-				message: fmt.Sprintf("a production deploy of %d change(s) needs --confirm when no person can answer a prompt; review the changes, then run oe deploy --confirm", len(plan.Changes)),
-				data:    map[string]any{"planId": plan.ID, "environment": plan.Environment, "changes": plan.Changes},
-			}
-		}
-		approved, err := askConfirmation(r.in, r.errOut, fmt.Sprintf("Deploy %d production change(s)?", len(plan.Changes)))
-		if err != nil {
-			return err
-		}
-		if !approved {
-			return &problem{code: "DEPLOY_CANCELLED", message: "production deploy cancelled", exit: exitFailure}
-		}
-	}
-	operation, err := operationID()
-	if err != nil {
-		return err
-	}
-	deployment, err := r.api.Deploy(ctx, control.CredentialRequest{AccessToken: access.AccessToken, OperationID: operation}, control.DeployRequest{
-		ExpectedRevision: plan.ExpectedRevision, PlanID: plan.ID, Policy: policy,
-		ProjectSlug: value.Project, Writer: "config",
-	})
-	if err != nil {
-		return err
-	}
-	if deployment.RelayURL == "" {
-		return errors.New("control API returned an incomplete production Relay connection")
-	}
-	if err := writeRelayEnvironment(filepath.Dir(configPath), ".env.production.local", connection.Variable, deployment.RelayURL); err != nil {
-		return err
-	}
-	return r.out.Success("deploy", "Production Relay is active. Install "+connection.Variable+" from .env.production.local in the hosting environment.", map[string]any{
-		"configurationFile": ".env.production.local", "deploymentId": deployment.ID,
-		"revision": deployment.Revision, "status": deployment.Status, "variable": connection.Variable,
-	})
-}
-
-// billingSetupRequired stops a deploy before a production mutation. It opens
-// the setup page for a person who can answer a prompt, and it always returns
-// the URL in action.url, so a caller without a browser can hand it on.
-func (r *runner) billingSetupRequired(plan control.Plan, access credential.Credential) error {
-	if plan.BillingSetupURL == "" {
-		return &problem{code: "BILLING_SETUP_REQUIRED", message: "production billing setup is incomplete and the control API returned no setup URL", exit: exitFailure}
-	}
-	if access.Source != "environment" && r.canPrompt() {
-		_ = r.openURL(plan.BillingSetupURL)
-	}
-	return &problem{
-		code: "BILLING_SETUP_REQUIRED", exit: exitFailure, next: "oe deploy", actionURL: plan.BillingSetupURL,
-		message: "production billing setup is incomplete; finish it at " + plan.BillingSetupURL + ", then run oe deploy again",
-		data:    map[string]any{"billingSetupUrl": plan.BillingSetupURL},
-	}
 }
 
 func (r *runner) project(ctx context.Context, args []string) error {
@@ -505,7 +372,7 @@ func environmentOf(project control.Project, environment string) *control.Project
 func environmentNotActive(project, environment string) *problem {
 	next := "oe new"
 	if environment == "production" {
-		next = "oe deploy"
+		next = "oe config push"
 	}
 	return &problem{
 		code: "ENVIRONMENT_NOT_ACTIVE", exit: exitFailure, next: next,
@@ -756,51 +623,6 @@ func hasNotificationProfile(profiles []control.NotificationProfile, expected con
 	return false
 }
 
-func (r *runner) deployContext(ctx context.Context, scope string) (config.Config, control.Project, credential.Credential, error) {
-	_, value, err := r.loadConfig()
-	if err != nil {
-		return config.Config{}, control.Project{}, credential.Credential{}, err
-	}
-	access, err := r.access(ctx, scope, false)
-	if err != nil {
-		return config.Config{}, control.Project{}, credential.Credential{}, err
-	}
-	project, err := r.api.GetProject(ctx, control.CredentialRequest{AccessToken: access.AccessToken}, value.Project)
-	if err != nil {
-		return config.Config{}, control.Project{}, credential.Credential{}, err
-	}
-	if project.Writer != "config" {
-		return config.Config{}, control.Project{}, credential.Credential{}, &problem{
-			code: "CONSOLE_WRITER", exit: exitFailure,
-			message: "this project is console-first; repository deploys are disabled",
-		}
-	}
-	return value, project, access, nil
-}
-
-func validatePlan(plan control.Plan, project control.Project, environment string) error {
-	if plan.ID == "" {
-		return errors.New("control API returned a plan without an ID")
-	}
-	if plan.Environment != environment {
-		return errors.New("control API returned a plan for a different environment")
-	}
-	expectedRevision := "0"
-	if environment == "sandbox" && project.Sandbox != nil {
-		expectedRevision = project.Sandbox.Revision
-	}
-	if environment == "production" && project.Production != nil {
-		expectedRevision = project.Production.Revision
-	}
-	if plan.ExpectedRevision != expectedRevision {
-		return errors.New("control API returned a plan for a stale project revision")
-	}
-	if plan.ProjectSlug != project.Slug {
-		return errors.New("control API returned a plan for a different project")
-	}
-	return nil
-}
-
 func controlPolicy(value config.Config, environment string) (control.RelayPolicyRequest, error) {
 	if environment == "production" && value.Environments.Production == nil {
 		return control.RelayPolicyRequest{}, &problem{
@@ -975,14 +797,12 @@ func parseGlobal(args []string) (globalOptions, string, []string, error) {
 }
 
 // defaultEnvironment gives the environment of a run without --env. doctor,
-// project, and notifications take OE_ENV, then sandbox. plan and deploy keep
-// Production, and new keeps Sandbox, so a variable left in a shell never
-// changes the target of a deploy. config ignores OE_ENV, so the variable never
-// narrows a pull.
+// project, and notifications take OE_ENV, then sandbox. new keeps Sandbox, so
+// a variable left in a shell never changes the target of a new project. config
+// ignores OE_ENV, so the variable never narrows a pull or changes what a push
+// applies.
 func defaultEnvironment(command string, getenv func(string) string) (string, bool, error) {
 	switch command {
-	case "plan", "deploy":
-		return "production", false, nil
 	case "doctor", "project", "notifications":
 		selected := getenv("OE_ENV")
 		if selected == "" {

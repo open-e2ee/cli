@@ -43,13 +43,12 @@ oe new                  create a project and its Sandbox environment, and write 
 oe auth login           log in with a browser, store the session in the OS keychain, and accept the terms
 oe auth status          show the user, the organization, the terms state, and the token source
 oe auth logout          remove the stored session
-oe plan                 show the production configuration change without applying it
-oe deploy               complete the production card gate, deploy, and install its Relay connection
 oe doctor               check project, environment, connection, credentials, and control-plane health; --wait waits for the first acknowledged Sandbox message
 oe link [PROJECT]       link the directory to a project and write the env file of each active environment
 oe project list         list the projects that the session can read, with the state of Production
 oe project show         read a project and the state of each environment
 oe project connection   print the Relay connection URL of one environment
+oe config push          apply the Sandbox section, then the Production section when the config has one; --dry-run changes nothing
 oe config pull          write the Relay policy of each active environment into open-e2ee.config.ts
 oe notifications        stage and verify best-effort notification profiles
 oe help [COMMAND]       show every command, or the usage of one command
@@ -64,9 +63,10 @@ final JSON document, and `oe auth login` emits one pending event before it. `--j
 events. `--agent yes|no|auto` says whether a coding agent runs `oe`.
 `--env sandbox|production` (`-e`) selects the environment. Without it,
 `oe doctor`, `oe project`, and `oe notifications` read `OE_ENV`, then use
-sandbox. `oe new` always uses sandbox, and `oe plan` and `oe deploy` use
-production, whatever `OE_ENV` holds. The config pull reads each active
-environment, or only the one that `--env` names. It ignores `OE_ENV`.
+sandbox. `oe new` always uses sandbox. The config pull reads each active
+environment, and `oe config push` applies every environment section of the
+config. Only `--env` narrows either to one environment; `OE_ENV` never changes
+what a pull reads or what a push applies.
 
 ## Use from a coding agent
 
@@ -89,7 +89,7 @@ event before the result (see below).
 
 ```json
 {"status":"ok","command":"project","message":"...","data":{}}
-{"status":"error","command":"plan","error":"...","code":"CONFIG_NOT_FOUND","next":"oe new"}
+{"status":"error","command":"config push","error":"...","code":"CONFIG_NOT_FOUND","next":"oe new"}
 ```
 
 Switch on `code`, not on the text of `error`. When `next` is present, it is the
@@ -101,7 +101,7 @@ goes to stderr as `error:`, `action:`, and `next:` lines, and stdout stays clean
 | --------- | -------------------------------------------------------------------------------------------------- |
 | 0         | The command succeeded.                                                                             |
 | 1         | The command failed. `code` tells why.                                                              |
-| 2         | The command line is invalid, or a required input is missing, for example `--confirm`.              |
+| 2         | The command line is invalid, or a required input is missing, for example `--yes`.                  |
 | 4         | Authentication is required. Run `oe auth login`.                                                   |
 | 5         | A person must act. `error` tells what to do. When `action.url` is present, it is the page to open. |
 | 6         | The failure is temporary. `next` is the same command. Run it again later.                          |
@@ -144,14 +144,24 @@ oe project connection my-chat --env production --json
 In JSON, `data.variable` names the variable that the application reads (see
 [Configuration ownership](#configuration-ownership)). A project with no active
 environment fails with `ENVIRONMENT_NOT_ACTIVE`, and `next` names
-`oe new` or `oe deploy`.
+`oe new` or `oe config push`.
 
-A production deploy never waits for an answer that no person can give. Without
-a terminal, under an agent, and in JSON and CI modes, `oe deploy` stops with
-`CONFIRMATION_REQUIRED` and returns the plan in `data`. Review the changes, then
-run `oe deploy --confirm`. When billing setup is incomplete, the deploy stops
-with `BILLING_SETUP_REQUIRED`, and `action.url` is the page a person must
-finish. `oe` opens that page in a browser only for a person at a terminal.
+`oe config push` applies the Sandbox section, then the Production section. The
+`production` entry under `environments` is the opt-in: without it, a push never
+changes Production. When Sandbox does not apply, the push skips Production.
+`data.environments.<env>.status` is `applied`, `unchanged`, `blocked`, `failed`,
+or `skipped`, and a push that does not apply every section takes the `code` of
+the first section that did not apply. `oe config push --dry-run` shows the
+changes and changes nothing.
+
+A Production change never waits for an answer that no person can give. Without
+a terminal, under an agent, and in JSON and CI modes, the push stops with
+`CONFIRMATION_REQUIRED`. Review the changes, then run `oe config push --yes`.
+An activation needs the billing permission, the terms, an open Free plan slot,
+and a card on the organization. Each missing one exits 5:
+`BILLING_PERMISSION_REQUIRED`, `TERMS_REQUIRED`, `FREE_PROJECT_LIMIT`, or
+`CARD_REQUIRED`, where `action.url` is the card page. A person at a terminal
+waits on the card page instead, and `oe` opens it in a browser.
 
 ## Configuration ownership
 
@@ -186,8 +196,8 @@ value. With `--dry-run`, the pull returns the changes and the edits, and writes
 nothing.
 
 The config holds no Relay connection. `oe new` writes the sandbox
-connection to `.env.local`. `oe deploy` writes the production value to
-`.env.production.local`. The commands add both files to `.gitignore`. The application
+connection to `.env.local`. `oe config push` writes the production value to
+`.env.production.local` when Production applies. The commands add both files to `.gitignore`. The application
 does not select a Relay hostname or pair an endpoint with a second key.
 
 The variable follows the framework in `package.json`:
@@ -203,9 +213,9 @@ The first match in the table wins. The CLI replaces only its own comment and
 the lines that assign its variable. It keeps every other line, the line
 breaks, an `export` prefix, and the file permissions.
 
-`oe deploy` writes `.env.production.local`. If the hosting provider does not
-read that file, install the value of the variable that `oe deploy` names in the
-production build environment. The application source stays unchanged.
+`oe config push` writes `.env.production.local`. If the hosting provider does
+not read that file, install the value of the variable that `oe config push`
+names in the production build environment. The application source stays unchanged.
 
 ## iOS notification workflow
 

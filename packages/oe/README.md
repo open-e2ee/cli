@@ -6,7 +6,7 @@ installation.
 
 Run `oe auth login` to log in with a browser and accept the terms for the
 organization. Use `oe new` to create a project and its Sandbox environment,
-and `oe deploy` for Production.
+and `oe config push` to apply the environment sections of the config.
 
 `open-e2ee.config.ts` imports `defineConfig` and the config types from
 `@open-e2ee/oe/config`. `oe` reads the file with Node.js 22.18 or later, and

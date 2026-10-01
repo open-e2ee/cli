@@ -78,7 +78,7 @@ func TestUsageErrorsExitTwoInTheRequestedMode(t *testing.T) {
 	for name, args := range map[string][]string{
 		"unknown command":           {"--json", "bogus"},
 		"unknown global flag":       {"--bogus", "--json"},
-		"unknown command flag":      {"deploy", "--bogus", "--json"},
+		"unknown command flag":      {"config", "push", "--bogus", "--json"},
 		"unexpected argument":       {"--json", "doctor", "extra"},
 		"missing global flag value": {"--json", "doctor", "--env"},
 		"invalid environment":       {"--json", "--env=stage", "doctor"},
@@ -97,7 +97,7 @@ func TestUsageErrorsExitTwoInTheRequestedMode(t *testing.T) {
 			if failure.Status != "error" || failure.Code != "USAGE_ERROR" || !strings.HasPrefix(failure.Next, "oe ") {
 				t.Fatalf("usage error has no code or next command: %s", stdout)
 			}
-			if strings.Contains(failure.Error, "flag provided but not defined") && !strings.Contains(failure.Error, "oe deploy") {
+			if strings.Contains(failure.Error, "flag provided but not defined") && !strings.Contains(failure.Error, "oe config push") {
 				t.Fatalf("flag error does not name the command: %s", failure.Error)
 			}
 		})
@@ -105,7 +105,7 @@ func TestUsageErrorsExitTwoInTheRequestedMode(t *testing.T) {
 }
 
 func TestTextFailureNamesTheNextCommandOnStandardError(t *testing.T) {
-	exit, stdout, stderr := run(t, Dependencies{}, "plan")
+	exit, stdout, stderr := run(t, Dependencies{}, "config", "push")
 	if exit != exitFailure || stdout != "" {
 		t.Fatalf("text failure wrote to stdout or exited %d: %q", exit, stdout)
 	}
@@ -208,8 +208,8 @@ func TestProjectConnectionPrintsTheServerRelayURL(t *testing.T) {
 	}
 	exit, stdout, _ = run(t, dependencies, "--json", "project", "connection", "--env", "production")
 	inactive := decodeEvent(t, []byte(stdout))
-	if exit != exitFailure || inactive.Code != "ENVIRONMENT_NOT_ACTIVE" || inactive.Next != "oe deploy" {
-		t.Fatalf("inactive Production did not name oe deploy: %s", stdout)
+	if exit != exitFailure || inactive.Code != "ENVIRONMENT_NOT_ACTIVE" || inactive.Next != "oe config push" {
+		t.Fatalf("inactive Production did not name oe config push: %s", stdout)
 	}
 	if !slices.Equal(requested, []string{"connection-chat", "other-chat", "connection-chat"}) {
 		t.Fatalf("connection read the wrong projects: %v", requested)
@@ -236,20 +236,14 @@ func TestProjectShowNeedsNoConfigAndOmitsTheConnection(t *testing.T) {
 	}
 }
 
-// productionPlan answers a Production plan for project. The plan needs a
-// card when setupURL is not empty.
-func productionPlan(project, setupURL string) *fakeAPI {
-	return &fakeAPI{
-		getProject: func(context.Context, control.CredentialRequest, string) (control.Project, error) {
-			return control.Project{Slug: project, Writer: "config"}, nil
-		},
-		plan: func(context.Context, control.CredentialRequest, control.PlanRequest) (control.Plan, error) {
-			return control.Plan{
-				ID: "plan-1", ProjectSlug: project, Environment: "production", ExpectedRevision: "0",
-				BillingReady: setupURL == "", BillingSetupURL: setupURL,
-			}, nil
-		},
+// productionActivation answers a project whose Production can activate, and
+// needs a card first when card is true.
+func productionActivation(t *testing.T, project string, card bool) *pushConsole {
+	console := newPushConsole(t, project)
+	if card {
+		console.blockProduction(control.BlockedByCard)
 	}
+	return console
 }
 
 // deviceLogin answers a browser authorization that a person approves at once,
@@ -330,11 +324,11 @@ func TestAgentNeverOpensABrowser(t *testing.T) {
 	store := credential.NewMemory()
 	storeCredential(t, store, "deploy:write")
 	exit, stdout, _ = run(t, Dependencies{
-		API: productionPlan("agent-chat", "https://billing.example/setup"), Store: store, WorkingDir: directory,
+		API: productionActivation(t, "agent-chat", true), Store: store, WorkingDir: directory,
 		Getenv: codex, Interactive: terminal, OpenURL: browser.open,
-	}, "deploy", "--confirm")
+	}, "config", "push", "--yes")
 	failure := decodeEvent(t, []byte(stdout))
-	if exit != exitFailure || failure.Code != "BILLING_SETUP_REQUIRED" || failure.Action.URL != "https://billing.example/setup" {
+	if exit != exitPersonAction || failure.Code != "CARD_REQUIRED" || failure.Action.URL != cardSetupURL {
 		t.Fatalf("an agent did not get the setup page in action.url: exit=%d %s", exit, stdout)
 	}
 	if len(browser.opened) != 0 {
@@ -352,15 +346,15 @@ func TestNoTTYAndNoAgentNeverPrompts(t *testing.T) {
 		Interactive: func() bool { return false }, OpenURL: browser.open,
 	}
 
-	script.API = productionPlan("headless-chat", "")
-	exit, stdout, stderr := run(t, script, "deploy")
-	if exit != exitUsage || stdout != "" || strings.Contains(stderr, "[y/N]") || !strings.HasSuffix(stderr, "next: oe deploy --confirm\n") {
+	script.API = productionActivation(t, "headless-chat", false)
+	exit, stdout, stderr := run(t, script, "config", "push")
+	if exit != exitUsage || stdout != "" || strings.Contains(stderr, "[y/N]") || !strings.HasSuffix(stderr, "next: oe config push --yes\n") {
 		t.Fatalf("a script got a prompt in place of a text refusal: exit=%d stdout=%q stderr=%q", exit, stdout, stderr)
 	}
 
-	script.API = productionPlan("headless-chat", "https://billing.example/setup")
-	exit, _, stderr = run(t, script, "deploy", "--confirm")
-	if exit != exitFailure || !strings.Contains(stderr, "https://billing.example/setup") {
+	script.API = productionActivation(t, "headless-chat", true)
+	exit, _, stderr = run(t, script, "config", "push", "--yes")
+	if exit != exitPersonAction || !strings.Contains(stderr, cardSetupURL) {
 		t.Fatalf("a script did not get the setup page: exit=%d stderr=%q", exit, stderr)
 	}
 
@@ -379,10 +373,10 @@ func TestAgentAtATerminalNeverPrompts(t *testing.T) {
 	store := credential.NewMemory()
 	storeCredential(t, store, "deploy:write")
 	exit, stdout, _ := run(t, Dependencies{
-		API: productionPlan("terminal-chat", ""), Store: store, WorkingDir: directory, In: unreadable{t},
+		API: productionActivation(t, "terminal-chat", false), Store: store, WorkingDir: directory, In: unreadable{t},
 		Getenv: environment(map[string]string{"OPENCODE": "1"}), Interactive: terminal,
-	}, "deploy")
-	if failure := decodeEvent(t, []byte(stdout)); exit != exitUsage || failure.Code != "CONFIRMATION_REQUIRED" || failure.Next != "oe deploy --confirm" {
+	}, "config", "push")
+	if failure := decodeEvent(t, []byte(stdout)); exit != exitUsage || failure.Code != "CONFIRMATION_REQUIRED" || failure.Next != "oe config push --yes" {
 		t.Fatalf("an agent at a terminal was not refused without a prompt: exit=%d %s", exit, stdout)
 	}
 }
@@ -417,7 +411,7 @@ func TestAgentDefaultsToJSON(t *testing.T) {
 	if exit != 0 || decodeEvent(t, []byte(stdout)).Data["version"] != Version {
 		t.Fatalf("an agent did not get JSON by default: exit=%d %q", exit, stdout)
 	}
-	exit, stdout, stderr := run(t, Dependencies{Getenv: claudeCode}, "plan")
+	exit, stdout, stderr := run(t, Dependencies{Getenv: claudeCode}, "config", "push")
 	if failure := decodeEvent(t, []byte(stdout)); exit != exitFailure || stderr != "" || failure.Code != "CONFIG_NOT_FOUND" {
 		t.Fatalf("an agent did not get the failure as JSON on stdout: exit=%d stdout=%q stderr=%q", exit, stdout, stderr)
 	}

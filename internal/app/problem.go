@@ -23,8 +23,10 @@ type problem struct {
 	data    map[string]any
 	cause   error
 
-	// actionURL is a page that a person must open to move forward.
-	actionURL string
+	// actionURL is a page that a person must open to move forward, and
+	// actionReason says why. A reason makes the action a browser step.
+	actionURL    string
+	actionReason string
 }
 
 func (p *problem) Error() string { return p.message }
@@ -46,11 +48,15 @@ func loginRequired(code, message string, cause error) error {
 	return &problem{code: code, message: message, next: "oe auth login", exit: exitAuthentication, cause: cause}
 }
 
+// productionOptIn tells how to activate Production. A read of an environment
+// that is not active adds it to its message.
+const productionOptIn = "to activate Production, add production: {} under environments in " + config.Filename + " when it has no Production section, then run oe config push"
+
 // classify gives every error that reaches Run a code and an exit status. A
 // control API refusal keeps the code that the console sent. A temporary failure
-// exits 6, and its next is the command line of the run. A terms refusal exits
-// 5: a person must accept, or an administrator must. environment is the
-// environment of the run.
+// exits 6, and its next is the command line of the run. A terms, card, or Free
+// plan refusal exits 5: a person must act. environment is the environment of
+// the run.
 func classify(err error, commandLine, environment string) *problem {
 	if known, ok := errors.AsType[*problem](err); ok {
 		return known
@@ -85,9 +91,17 @@ func classify(err error, commandLine, environment string) *problem {
 			}
 		case refusal.Code == "TERMS_PERMISSION_REQUIRED":
 			result.exit = exitPersonAction
+		case refusal.Code == "CARD_REQUIRED":
+			result.exit, result.next = exitPersonAction, commandLine
+			result.actionURL, result.actionReason = refusal.BillingSetupURL, "card"
+		case refusal.Code == "FREE_PROJECT_LIMIT":
+			result.exit = exitPersonAction
 		case refusal.Code == "ENVIRONMENT_NOT_FOUND" && environment == "sandbox":
 			// Every project has Sandbox, so the session cannot read this project.
 			result.next = "oe auth status"
+		case refusal.Code == "ENVIRONMENT_NOT_FOUND" && environment == "production":
+			result.next = "oe config push"
+			result.message += "; " + productionOptIn
 		case refusal.Code == "AUTHORITY_UNAVAILABLE", refusal.Status == http.StatusTooManyRequests,
 			refusal.Status == http.StatusBadGateway, refusal.Status == http.StatusServiceUnavailable,
 			refusal.Status == http.StatusGatewayTimeout:
@@ -119,8 +133,9 @@ func commandLine(args []string) string {
 const shellSafe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./_-"
 
 func (p *problem) output() output.Problem {
-	return output.Problem{
-		Message: p.message, Code: p.code, Next: p.next,
-		Action: output.Action{URL: p.actionURL}, Data: p.data,
+	action := output.Action{URL: p.actionURL}
+	if p.actionReason != "" {
+		action.Kind, action.Reason = "browser", p.actionReason
 	}
+	return output.Problem{Message: p.message, Code: p.code, Next: p.next, Action: action, Data: p.data}
 }

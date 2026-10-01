@@ -93,11 +93,6 @@ func TestOEEnvSelectsForReads(t *testing.T) {
 	storeCredential(t, store, "project:read", "project:write", "deploy:write")
 	var read []string
 	api := twoEnvironments(&read)
-	var planned string
-	api.plan = func(_ context.Context, _ control.CredentialRequest, request control.PlanRequest) (control.Plan, error) {
-		planned = request.Environment
-		return control.Plan{ID: "plan-1", ProjectSlug: request.ProjectSlug, Environment: request.Environment, ExpectedRevision: "7", BillingReady: true}, nil
-	}
 	relay := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.URL.String() != productionRelayURL {
 			t.Fatalf("doctor requested an unexpected URL: %s", request.URL)
@@ -126,13 +121,6 @@ func TestOEEnvSelectsForReads(t *testing.T) {
 		t.Fatalf("doctor did not read OE_ENV: exit=%d %s", exit, stdout)
 	}
 
-	// A variable left in a shell never changes the target of a deploy.
-	sandbox := production
-	sandbox.Getenv = environment(map[string]string{"OE_ENV": "sandbox"})
-	if exit, stdout, _ := run(t, sandbox, "--json", "plan"); exit != 0 || planned != "production" {
-		t.Fatalf("OE_ENV=sandbox changed the plan environment to %q: %s", planned, stdout)
-	}
-
 	invalid := production
 	invalid.Getenv = environment(map[string]string{"OE_ENV": "stage"})
 	exit, stdout, _ = run(t, invalid, "--json", "project", "connection")
@@ -149,7 +137,7 @@ func TestEnvironmentFlagIsAUsageError(t *testing.T) {
 		{"--json", "--environment", "sandbox", "doctor"},
 		{"--json", "--environment=production", "project", "connection"},
 		{"--json", "project", "connection", "--environment", "production"},
-		{"--json", "plan", "--environment=sandbox"},
+		{"--json", "config", "push", "--environment=sandbox"},
 	} {
 		exit, stdout, _ := run(t, Dependencies{WorkingDir: initializedProject(t, "flag-chat")}, args...)
 		if failure := decodeEvent(t, []byte(stdout)); exit != exitUsage || failure.Code != "USAGE_ERROR" {
@@ -175,7 +163,8 @@ func TestSandboxEnvironmentNotFoundNamesAuthStatus(t *testing.T) {
 		t.Fatalf("Sandbox ENVIRONMENT_NOT_FOUND did not name oe auth status: exit=%d %s", exit, stdout)
 	}
 	exit, stdout, _ = run(t, dependencies, "--json", "notifications", "status", "--env", "production")
-	if failure := decodeEvent(t, []byte(stdout)); exit != exitFailure || failure.Code != "ENVIRONMENT_NOT_FOUND" || failure.Next == "oe auth status" {
-		t.Fatalf("Production ENVIRONMENT_NOT_FOUND named oe auth status: exit=%d %s", exit, stdout)
+	if failure := decodeEvent(t, []byte(stdout)); exit != exitFailure || failure.Code != "ENVIRONMENT_NOT_FOUND" || failure.Next != "oe config push" ||
+		!strings.Contains(failure.Error, "add production: {} under environments") {
+		t.Fatalf("Production ENVIRONMENT_NOT_FOUND did not name the Production opt-in: exit=%d %s", exit, stdout)
 	}
 }
