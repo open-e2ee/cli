@@ -39,6 +39,7 @@ func TestWorkOSDeviceAuthorizationAndRefreshStayOffTheControlOrigin(t *testing.T
 			json.NewEncoder(response).Encode(deviceAuthorizationResponse{
 				DeviceCode: "device-secret", ExpiresIn: 300, Interval: 1,
 				UserCode: "ABCD-EFGH", VerificationURIComplete: "https://auth.example/device?user_code=ABCD-EFGH",
+				VerificationURI: "https://auth.example/device",
 			})
 		case "/user_management/authenticate":
 			if err := request.ParseForm(); err != nil {
@@ -87,7 +88,8 @@ func TestWorkOSDeviceAuthorizationAndRefreshStayOffTheControlOrigin(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !authorization.CodeInURL || authorization.VerificationURL != "https://auth.example/device?user_code=ABCD-EFGH" {
+	if !authorization.CodeInURL || authorization.VerificationURL != "https://auth.example/device?user_code=ABCD-EFGH" ||
+		authorization.BareVerificationURL != "https://auth.example/device" {
 		t.Fatalf("complete verification URL: %#v", authorization)
 	}
 	pending, err := client.PollAuthorization(context.Background(), authorization)
@@ -324,6 +326,52 @@ func TestTermsReadAndAcceptanceUseTheConsoleShapes(t *testing.T) {
 	}
 	if len(bodies) != 2 || bodies[0] != `{"actor":"agent","agentName":"claude-code"}` || bodies[1] != `{"actor":"person"}` {
 		t.Fatalf("acceptance bodies %q", bodies)
+	}
+}
+
+func TestSessionReadUsesTheConsoleShape(t *testing.T) {
+	answers := map[string]string{
+		"person":               `{"schemaVersion":1,"user":{"id":"user_1","email":"jane@example.com","name":null},"organization":{"id":"org_1","name":"Acme Inc."},"role":null,"agent":null}`,
+		"agent":                `{"schemaVersion":1,"user":{"id":"user_1","email":"jane@example.com","name":"Jane Doe"},"organization":{"id":"org_1","name":"Acme Inc."},"role":"admin","agent":{"registrationId":"agent_reg_1"}}`,
+		"no organization name": `{"schemaVersion":1,"user":{"id":"user_1","email":"jane@example.com","name":null},"organization":{"id":"org_1","name":""},"role":null,"agent":null}`,
+		"no registration":      `{"schemaVersion":1,"user":{"id":"user_1","email":"jane@example.com","name":null},"organization":{"id":"org_1","name":"Acme Inc."},"role":null,"agent":{}}`,
+		"another version":      `{"schemaVersion":2,"user":{"id":"user_1","email":"jane@example.com","name":null},"organization":{"id":"org_1","name":"Acme Inc."},"role":null,"agent":null}`,
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.Method+" "+request.URL.Path != "GET /api/cli/v1/auth/session" {
+			t.Errorf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+		bearer, ok := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+		if !ok {
+			response.WriteHeader(http.StatusUnauthorized)
+			response.Write([]byte(`{"code":"AUTHENTICATION_REQUIRED","message":"Run oe auth login first."}`))
+			return
+		}
+		response.Write([]byte(answers[bearer]))
+	}))
+	defer server.Close()
+	client, err := New(server.URL+"/api/cli", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	person, err := client.Session(context.Background(), CredentialRequest{AccessToken: "person"})
+	if err != nil || person.User.Email != "jane@example.com" || person.User.Name != "" || person.Organization.Name != "Acme Inc." ||
+		person.Role != "" || person.Agent != nil {
+		t.Fatalf("person session: %#v %v", person, err)
+	}
+	agent, err := client.Session(context.Background(), CredentialRequest{AccessToken: "agent"})
+	if err != nil || agent.User.Name != "Jane Doe" || agent.Role != "admin" || agent.Agent == nil || agent.Agent.RegistrationID != "agent_reg_1" {
+		t.Fatalf("agent session: %#v %v", agent, err)
+	}
+	for _, token := range []string{"no organization name", "no registration", "another version"} {
+		if _, err := client.Session(context.Background(), CredentialRequest{AccessToken: token}); err == nil {
+			t.Fatalf("the %s answer passed", token)
+		}
+	}
+	_, err = client.Session(context.Background(), CredentialRequest{})
+	if failure, ok := errors.AsType[*APIError](err); !ok || failure.Status != http.StatusUnauthorized || failure.Code != "AUTHENTICATION_REQUIRED" {
+		t.Fatalf("a read without a token: %v", err)
 	}
 }
 

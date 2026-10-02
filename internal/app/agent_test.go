@@ -259,7 +259,16 @@ func deviceLogin() *fakeAPI {
 		terms: func(context.Context, control.CredentialRequest) (control.Terms, error) {
 			return control.Terms{State: control.TermsAccepted, CanAccept: true}, nil
 		},
+		session: acmeSession,
 	}
+}
+
+// acmeSession answers the session read for a person without a name.
+func acmeSession(context.Context, control.CredentialRequest) (control.Session, error) {
+	return control.Session{
+		SchemaVersion: 1, User: control.SessionUser{ID: "user_example", Email: "jane@example.com"},
+		Organization: control.SessionOrganization{ID: "org_example", Name: "Acme Inc."},
+	}, nil
 }
 
 // unreadable is standard input that fails the test when a command reads it.

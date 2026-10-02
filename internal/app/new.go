@@ -143,7 +143,11 @@ func (r *runner) new(ctx context.Context, args []string) error {
 	request := control.BootstrapRequest{Policy: policy, ProjectSlug: project, Writer: "config", Name: *name}
 	bootstrap, err := r.api.BootstrapSandbox(ctx, credentials, request)
 	if refusal, ok := errors.AsType[*control.APIError](err); ok && refusal.Code == "TERMS_REQUIRED" && refusal.CanAccept && r.canPrompt() {
-		accepted, askErr := r.askTerms(claims.organizationName(), refusal.Documents)
+		identity, sessionErr := r.api.Session(ctx, control.CredentialRequest{AccessToken: access.AccessToken})
+		if sessionErr != nil {
+			return sessionErr
+		}
+		accepted, askErr := r.askTerms(identity.Organization.Name, refusal.Documents)
 		if askErr != nil {
 			return askErr
 		}
@@ -169,8 +173,8 @@ func (r *runner) new(ctx context.Context, args []string) error {
 	if !bootstrap.Created {
 		return &problem{
 			code: "PROJECT_EXISTS", exit: exitUsage, next: "oe new --project " + project + "-2",
-			message: fmt.Sprintf("Project %s already exists in %s. To use the existing project, run oe link %s.",
-				project, claims.organizationName(), project),
+			message: fmt.Sprintf("Project %s already exists in your organization. To use the existing project, run oe link %s.",
+				project, project),
 			data: map[string]any{"project": project},
 		}
 	}

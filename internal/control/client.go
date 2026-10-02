@@ -110,17 +110,25 @@ func (c *Client) StartAuthorization(ctx context.Context, request AuthorizationRe
 	if response.DeviceCode == "" || response.UserCode == "" || response.ExpiresIn < 1 || verificationURL == "" {
 		return Authorization{}, errors.New("WorkOS returned an incomplete device authorization")
 	}
-	parsedVerification, err := url.Parse(verificationURL)
-	if err != nil || parsedVerification.Scheme != "https" || parsedVerification.Host == "" || parsedVerification.User != nil {
-		return Authorization{}, errors.New("WorkOS returned an invalid verification URL")
+	for _, candidate := range []string{response.VerificationURIComplete, response.VerificationURI} {
+		if candidate != "" && !validVerificationURL(candidate) {
+			return Authorization{}, errors.New("WorkOS returned an invalid verification URL")
+		}
 	}
 	return Authorization{
 		CodeInURL: response.VerificationURIComplete != "",
 		ClientID:  configuration.ClientID, DeviceCode: response.DeviceCode,
 		ExpiresInSeconds: response.ExpiresIn, IntervalSeconds: response.Interval,
 		TokenEndpoint: configuration.TokenEndpoint, UserCode: response.UserCode,
-		VerificationURL: verificationURL,
+		VerificationURL: verificationURL, BareVerificationURL: response.VerificationURI,
 	}, nil
+}
+
+// validVerificationURL accepts only an HTTPS page with a host and no user
+// information, because the CLI opens it and shows it to the person.
+func validVerificationURL(value string) bool {
+	parsed, err := url.Parse(value)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != "" && parsed.User == nil
 }
 
 func (c *Client) PollAuthorization(ctx context.Context, authorization Authorization) (Token, error) {
@@ -351,6 +359,30 @@ func (c *Client) AcceptTerms(ctx context.Context, credential CredentialRequest, 
 		return TermsAcceptance{}, err
 	}
 	return response, validateTerms(response.Terms)
+}
+
+// Session reads the identity behind the access token: the person, the
+// organization, the role, and the agent registration of an agent session.
+func (c *Client) Session(ctx context.Context, credential CredentialRequest) (Session, error) {
+	var response Session
+	if err := c.do(ctx, http.MethodGet, "/v1/auth/session", credential, nil, &response); err != nil {
+		return Session{}, err
+	}
+	if err := validateSession(response); err != nil {
+		return Session{}, err
+	}
+	return response, nil
+}
+
+func validateSession(session Session) error {
+	if session.SchemaVersion != 1 {
+		return fmt.Errorf("the control API answered an unknown session schema version %d", session.SchemaVersion)
+	}
+	if session.User.ID == "" || session.User.Email == "" || session.Organization.ID == "" || session.Organization.Name == "" ||
+		(session.Agent != nil && session.Agent.RegistrationID == "") {
+		return errors.New("the control API answered an incomplete session")
+	}
+	return nil
 }
 
 func validateTerms(terms Terms) error {
