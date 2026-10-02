@@ -290,8 +290,14 @@ func (r *runner) announceProgress(authorization control.Authorization) {
 	}
 }
 
+// loginPrompt matches the verification page: a URL that carries the code opens a
+// page that asks the person to confirm the code it shows; a bare URL opens a
+// page that asks the person to type it.
 func loginPrompt(authorization control.Authorization) string {
-	return fmt.Sprintf("Open %s and enter code %s.", authorization.VerificationURL, authorization.UserCode)
+	if authorization.CodeInURL {
+		return fmt.Sprintf("Open %s and confirm that it shows the code %s.", authorization.VerificationURL, authorization.UserCode)
+	}
+	return fmt.Sprintf("Open %s and enter the code %s.", authorization.VerificationURL, authorization.UserCode)
 }
 
 func (r *runner) project(ctx context.Context, args []string) error {

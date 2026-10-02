@@ -109,7 +109,8 @@ goes to stderr as `error:`, `action:`, and `next:` lines, and stdout stays clean
 Log in once. A person must approve the login in a browser. Under an agent, `oe`
 does not open the browser. It writes a pending event, then the result after the
 person approves, so start the command in the background and give the person
-`action.url` and `data.userCode`:
+`action.url` and `data.userCode`. The person opens the URL and confirms that the
+page shows the code:
 
 ```bash
 oe auth login

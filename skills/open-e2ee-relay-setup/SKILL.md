@@ -23,7 +23,8 @@ document to stdout. It never prompts and never opens a browser.
 
 1. Start `oe auth login` in the background. It writes a pending event, then
    the result after the person approves the login.
-2. Give the person `action.url` and `data.userCode` from the pending event.
+2. Give the person `action.url` and `data.userCode` from the pending event. The
+   person opens the URL and confirms that the page shows the code.
 3. Read the result. `oe auth status` shows the session at any time.
 4. If `data.terms` is `required`, follow [The terms](#the-terms).
 

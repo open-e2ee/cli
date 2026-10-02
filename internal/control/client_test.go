@@ -87,6 +87,9 @@ func TestWorkOSDeviceAuthorizationAndRefreshStayOffTheControlOrigin(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !authorization.CodeInURL || authorization.VerificationURL != "https://auth.example/device?user_code=ABCD-EFGH" {
+		t.Fatalf("complete verification URL: %#v", authorization)
+	}
 	pending, err := client.PollAuthorization(context.Background(), authorization)
 	if err != nil || !pending.Pending {
 		t.Fatalf("pending poll: %#v %v", pending, err)

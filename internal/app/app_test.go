@@ -591,3 +591,14 @@ func (f *fakeAPI) AcceptTerms(ctx context.Context, credential control.Credential
 	}
 	return f.acceptTerms(ctx, credential, request)
 }
+
+func TestLoginPromptMatchesTheVerificationPage(t *testing.T) {
+	complete := control.Authorization{VerificationURL: "https://login.example/device?user_code=ABCD-EFGH", UserCode: "ABCD-EFGH", CodeInURL: true}
+	if got := loginPrompt(complete); got != "Open https://login.example/device?user_code=ABCD-EFGH and confirm that it shows the code ABCD-EFGH." {
+		t.Fatalf("complete URL prompt: %q", got)
+	}
+	bare := control.Authorization{VerificationURL: "https://login.example/device", UserCode: "ABCD-EFGH"}
+	if got := loginPrompt(bare); got != "Open https://login.example/device and enter the code ABCD-EFGH." {
+		t.Fatalf("bare URL prompt: %q", got)
+	}
+}
