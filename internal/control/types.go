@@ -34,6 +34,9 @@ type Authorization struct {
 	TokenEndpoint    string `json:"-"`
 	UserCode         string `json:"userCode"`
 	VerificationURL  string `json:"verificationUrl"`
+	// CodeInURL is true when VerificationURL already carries the user code, so
+	// the page asks the person to confirm the code instead of typing it.
+	CodeInURL bool `json:"-"`
 }
 
 type Token struct {

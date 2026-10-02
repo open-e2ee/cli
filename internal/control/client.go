@@ -115,7 +115,8 @@ func (c *Client) StartAuthorization(ctx context.Context, request AuthorizationRe
 		return Authorization{}, errors.New("WorkOS returned an invalid verification URL")
 	}
 	return Authorization{
-		ClientID: configuration.ClientID, DeviceCode: response.DeviceCode,
+		CodeInURL: response.VerificationURIComplete != "",
+		ClientID:  configuration.ClientID, DeviceCode: response.DeviceCode,
 		ExpiresInSeconds: response.ExpiresIn, IntervalSeconds: response.Interval,
 		TokenEndpoint: configuration.TokenEndpoint, UserCode: response.UserCode,
 		VerificationURL: verificationURL,
