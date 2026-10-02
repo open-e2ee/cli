@@ -41,7 +41,7 @@ and a slug that the organization already uses fails with `PROJECT_EXISTS`.
 ```text
 oe new                  create a project and its Sandbox environment, and write the config and its Relay connection
 oe auth login           log in with a browser, store the session in the OS keychain, and accept the terms
-oe auth status          show the user, the organization, the terms state, and the token source
+oe auth status          show the person, the organization, the terms state, and where the session is
 oe auth logout          remove the stored session
 oe doctor               check project, environment, connection, credentials, and control-plane health; --wait waits for the first acknowledged Sandbox message
 oe link [PROJECT]       link the directory to a project and write the env file of each active environment
@@ -106,19 +106,27 @@ goes to stderr as `error:`, `action:`, and `next:` lines, and stdout stays clean
 | 5         | A person must act. `error` tells what to do. When `action.url` is present, it is the page to open. |
 | 6         | The failure is temporary. `next` is the same command. Run it again later.                          |
 
-Log in once. A person must approve the login in a browser. Under an agent, `oe`
-does not open the browser. It writes a pending event, then the result after the
-person approves, so start the command in the background and give the person
-`action.url` and `data.userCode`. The person opens the URL and confirms that the
-page shows the code:
+Log in once. A person must approve the login in a browser. At a terminal, `oe`
+opens the browser and prints the page and the code:
 
 ```bash
 oe auth login
 ```
 
+```text
+Open https://.../device?user_code=ABCD-EFGH and confirm that it shows the code ABCD-EFGH.
+On another device, go to https://.../device and enter ABCD-EFGH.
+```
+
+Under an agent, `oe` does not open the browser. It writes a pending event, then
+the result after the person approves, so start the command in the background and
+give the person `action.url` and `data.userCode`. The person opens the URL and
+confirms that the page shows the code. On another device, the person goes to
+`data.bareVerificationUrl` and enters the code:
+
 ```json
-{"status":"pending","command":"auth login","message":"A person must approve this device.","action":{"kind":"browser","url":"https://...","reason":"login"},"data":{"userCode":"ABCD-EFGH","expiresInSeconds":900}}
-{"status":"ok","command":"auth login","message":"...","data":{"terms":"required","canAccept":true,"documents":[]},"next":"oe auth login --accept-terms"}
+{"status":"pending","command":"auth login","message":"A person must approve this device.","action":{"kind":"browser","url":"https://.../device?user_code=ABCD-EFGH","reason":"login"},"data":{"bareVerificationUrl":"https://.../device","expiresInSeconds":900,"userCode":"ABCD-EFGH"}}
+{"status":"ok","command":"auth login","message":"Signed in as Jane Doe (jane@example.com) in Acme Inc. Acme Inc. has not accepted the OpenE2EE terms.","data":{"email":"jane@example.com","userName":"Jane Doe","organizationName":"Acme Inc.","terms":"required","canAccept":true,"documents":[]},"next":"oe auth login --accept-terms"}
 ```
 
 The organization accepts the terms once. When `data.terms` is `required`, show
@@ -137,8 +145,20 @@ terminal who logs in, in an app directory with no config, chooses to create a
 project with `oe new`, link one with `oe link`, or skip. An agent or a run
 without a terminal gets no prompt, only `next`.
 
-`oe auth status` shows the user, the organization, the terms state, and the
-token source, and exits 4 without a session. Protected CI uses a scoped
+`oe auth status` shows the person, the organization, the terms state, and where
+the session is, and exits 4 without a session. An agent session names the
+person that the agent works for. The text shows no ID:
+
+```text
+Signed in as Jane Doe (jane@example.com) in Acme Inc. (macOS Keychain)
+Acme Inc. has accepted the OpenE2EE terms.
+```
+
+The store is `macOS Keychain`, `Secret Service` on Linux,
+`Windows Credential Manager`, or `OE_ACCESS_TOKEN`. In JSON, `data` also has the
+IDs (`user`, `organization.id`, and `agent.registrationId` for an agent), `role`,
+`source`, and `store` (`keychain`, `secret-service`, `wincred`, or
+`environment`). It never has a token. Protected CI uses a scoped
 `OE_ACCESS_TOKEN` instead of a login.
 
 Read the Relay connection URL of a project. Text mode prints only the URL, so a

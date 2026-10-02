@@ -281,9 +281,11 @@ func (r *runner) interactiveLogin(ctx context.Context, timeout time.Duration, an
 // so JSON mode keeps stdout for the one final document of the command.
 func (r *runner) announceProgress(authorization control.Authorization) {
 	prompt := loginPrompt(authorization)
-	_ = r.out.Progress("auth login", prompt, map[string]any{
-		"verificationUrl": authorization.VerificationURL, "userCode": authorization.UserCode,
-	})
+	data := map[string]any{"verificationUrl": authorization.VerificationURL, "userCode": authorization.UserCode}
+	if authorization.BareVerificationURL != "" {
+		data["bareVerificationUrl"] = authorization.BareVerificationURL
+	}
+	_ = r.out.Progress("auth login", prompt, data)
 	if r.mode == output.JSON {
 		// The person who approves the login reads the prompt on stderr.
 		fmt.Fprintln(r.errOut, prompt)
@@ -292,12 +294,17 @@ func (r *runner) announceProgress(authorization control.Authorization) {
 
 // loginPrompt matches the verification page: a URL that carries the code opens a
 // page that asks the person to confirm the code it shows; a bare URL opens a
-// page that asks the person to type it.
+// page that asks the person to type it. With both, a second line gives the bare
+// URL for a person who approves on another device (RFC 8628 section 3.3.1).
 func loginPrompt(authorization control.Authorization) string {
-	if authorization.CodeInURL {
-		return fmt.Sprintf("Open %s and confirm that it shows the code %s.", authorization.VerificationURL, authorization.UserCode)
+	if !authorization.CodeInURL {
+		return fmt.Sprintf("Open %s and enter the code %s.", authorization.VerificationURL, authorization.UserCode)
 	}
-	return fmt.Sprintf("Open %s and enter the code %s.", authorization.VerificationURL, authorization.UserCode)
+	prompt := fmt.Sprintf("Open %s and confirm that it shows the code %s.", authorization.VerificationURL, authorization.UserCode)
+	if bare := authorization.BareVerificationURL; bare != "" && bare != authorization.VerificationURL {
+		prompt += fmt.Sprintf("\nOn another device, go to %s and enter %s.", bare, authorization.UserCode)
+	}
+	return prompt
 }
 
 func (r *runner) project(ctx context.Context, args []string) error {

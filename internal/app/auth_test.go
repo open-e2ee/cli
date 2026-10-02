@@ -30,10 +30,19 @@ var relayTerms = []map[string]any{{
 	"version": "relay-2026-08-26",
 }}
 
-// console is a loopback control API with the WorkOS device flow and the terms
-// routes. The CLI reaches it through the real control client, so each body is
-// the JSON that the console route answers. routes serves any other
-// authorized route that a test adds.
+// personSession is the session route answer for a person with a name.
+func personSession() map[string]any {
+	return map[string]any{
+		"schemaVersion": 1, "user": map[string]any{"id": "user_example", "email": "jane@example.com", "name": "Jane Doe"},
+		"organization": map[string]any{"id": "org_example", "name": "Acme Inc."}, "role": "admin", "agent": nil,
+	}
+}
+
+// console is a loopback control API with the WorkOS device flow, the session
+// route, and the terms routes. The CLI reaches it through the real control
+// client, so each body is the JSON that the console route answers. session is
+// the answer of the session route. routes serves any other authorized route
+// that a test adds.
 type console struct {
 	t         *testing.T
 	server    *httptest.Server
@@ -41,13 +50,14 @@ type console struct {
 	mu        sync.Mutex
 	state     string
 	canAccept bool
+	session   map[string]any
 	requests  []string
 	accepts   []map[string]any
 }
 
 func newConsole(t *testing.T, state string, canAccept bool) *console {
 	t.Helper()
-	c := &console{t: t, routes: http.NewServeMux(), state: state, canAccept: canAccept}
+	c := &console{t: t, routes: http.NewServeMux(), state: state, canAccept: canAccept, session: personSession()}
 	c.server = httptest.NewServer(http.HandlerFunc(c.serve))
 	t.Cleanup(c.server.Close)
 	return c
@@ -85,7 +95,8 @@ func (c *console) serve(response http.ResponseWriter, request *http.Request) {
 	case "/user_management/authorize/device":
 		c.answer(response, http.StatusOK, map[string]any{
 			"device_code": "device", "user_code": "ABCD-EFGH", "expires_in": 900, "interval": 1,
-			"verification_uri": "https://login.example/device",
+			"verification_uri":          "https://login.example/device",
+			"verification_uri_complete": "https://login.example/device?user_code=ABCD-EFGH",
 		})
 		return
 	case "/user_management/authenticate":
@@ -101,6 +112,8 @@ func (c *console) serve(response http.ResponseWriter, request *http.Request) {
 		return
 	}
 	switch request.Method + " " + request.URL.Path {
+	case "GET /api/cli/v1/auth/session":
+		c.answer(response, http.StatusOK, c.session)
 	case "GET /api/cli/v1/terms":
 		c.answer(response, http.StatusOK, c.terms())
 	case "POST /api/cli/v1/terms/acceptance":
@@ -219,13 +232,17 @@ func TestAuthLoginUnderAnAgentWritesPendingThenResult(t *testing.T) {
 	}
 	pending, result := events[0], events[1]
 	if pending.Status != "pending" || pending.Command != "auth login" || pending.Message != "A person must approve this device." ||
-		pending.Action.Kind != "browser" || pending.Action.URL != "https://login.example/device" || pending.Action.Reason != "login" ||
-		pending.Data["userCode"] != "ABCD-EFGH" || pending.Data["expiresInSeconds"] != float64(900) {
+		pending.Action.Kind != "browser" || pending.Action.URL != "https://login.example/device?user_code=ABCD-EFGH" || pending.Action.Reason != "login" ||
+		pending.Data["userCode"] != "ABCD-EFGH" || pending.Data["expiresInSeconds"] != float64(900) ||
+		pending.Data["bareVerificationUrl"] != "https://login.example/device" {
 		t.Fatalf("the pending event does not hand the device to a person: %s", stdout)
 	}
 	organization, _ := result.Data["organization"].(map[string]any)
 	if result.Status != "ok" || result.Command != "auth login" || result.Next != "" || organization["id"] != "org_example" ||
-		result.Data["user"] != "user_example" || result.Data["terms"] != "accepted" || result.Data["source"] != "keychain" {
+		result.Data["user"] != "user_example" || result.Data["email"] != "jane@example.com" || result.Data["userName"] != "Jane Doe" ||
+		result.Data["organizationName"] != "Acme Inc." || result.Data["role"] != "admin" ||
+		result.Data["terms"] != "accepted" || result.Data["source"] != "keychain" || result.Data["store"] != credential.LocationOf("keychain").Key ||
+		result.Message != "Signed in as Jane Doe (jane@example.com) in Acme Inc. Acme Inc. has accepted the OpenE2EE terms." {
 		t.Fatalf("the login result is incomplete: %s", stdout)
 	}
 	if len(browser.opened) != 0 || strings.Contains(stdout, sessionToken()[:20]) {
@@ -307,7 +324,7 @@ func TestAuthLoginAsksAPersonAtATerminal(t *testing.T) {
 		dependencies.In = strings.NewReader(test.answer)
 		exit, stdout, stderr := run(t, dependencies, "--control-url", server.controlURL(), "auth", "login")
 		if exit != 0 || !strings.Contains(stderr, "Relay service terms: https://open-e2ee.dev/legal/relay-terms/2026-08-26") ||
-			!strings.Contains(stderr, "Accept these terms for org_example? [y/N]") {
+			!strings.Contains(stderr, "Accept these terms for Acme Inc.? [y/N]") {
 			t.Fatalf("a person was not asked once with the documents: exit=%d stdout=%q stderr=%q", exit, stdout, stderr)
 		}
 		server.mu.Lock()
@@ -332,7 +349,7 @@ func TestAcceptTermsWithoutPermissionExitsFiveAndKeepsTheSession(t *testing.T) {
 	exit, stdout, _ := run(t, dependencies, "--control-url", server.controlURL(), "auth", "login")
 	events := decodeEvents(t, stdout)
 	if result := events[len(events)-1]; exit != 0 || result.Data["canAccept"] != false || result.Next != "" ||
-		!strings.Contains(result.Message, "An administrator of org_example must accept them") {
+		!strings.Contains(result.Message, "An administrator of Acme Inc. must accept them") {
 		t.Fatalf("a member login did not name the administrator: exit=%d %s", exit, stdout)
 	}
 
@@ -367,14 +384,98 @@ func TestAuthStatusReportsTermsAndTokenSource(t *testing.T) {
 	organization, _ := status.Data["organization"].(map[string]any)
 	// The memory store stands in for the OS keychain and names itself.
 	if exit != 0 || status.Command != "auth status" || status.Data["user"] != "user_example" || organization["id"] != "org_example" ||
-		status.Data["terms"] != "required" || status.Data["canAccept"] != false || status.Data["source"] != "memory" {
+		status.Data["email"] != "jane@example.com" || status.Data["userName"] != "Jane Doe" || status.Data["organizationName"] != "Acme Inc." ||
+		status.Data["role"] != "admin" || status.Data["terms"] != "required" || status.Data["canAccept"] != false ||
+		status.Data["source"] != "memory" || status.Data["store"] != "memory" {
 		t.Fatalf("auth status is incomplete: exit=%d %s", exit, stdout)
 	}
+	if strings.Contains(stdout, sessionToken()[:20]) || strings.Contains(stdout, "refresh") {
+		t.Fatalf("auth status printed a token: %s", stdout)
+	}
+}
 
-	t.Setenv("OE_ACCESS_TOKEN", sessionToken())
-	exit, stdout, _ = run(t, server.dependencies(credential.NewMemory(), nil), "--control-url", server.controlURL(), "auth", "status")
-	if exit != 0 || !strings.Contains(stdout, "The credential is OE_ACCESS_TOKEN.") || !strings.Contains(stdout, "has not accepted the OpenE2EE terms.") {
-		t.Fatalf("auth status did not name the environment credential: exit=%d %q", exit, stdout)
+// The text of auth status leads with the person and ends the line with the
+// store. It names no user, organization, or registration ID.
+func TestAuthStatusTextNamesThePersonNotAnID(t *testing.T) {
+	agent := personSession()
+	agent["agent"] = map[string]any{"registrationId": "agent_reg_example"}
+	unnamed := personSession()
+	unnamed["user"] = map[string]any{"id": "user_example", "email": "jane@example.com", "name": nil}
+	unnamed["role"] = nil
+	plain := personSession()
+	plain["organization"] = map[string]any{"id": "org_example", "name": "Acme"}
+	keychain := credential.LocationOf("keychain").Label
+	for _, test := range []struct {
+		name        string
+		session     map[string]any
+		environment bool
+		terms       string
+		want        string
+	}{
+		{"person with a name", personSession(), false, "accepted",
+			"Signed in as Jane Doe (jane@example.com) in Acme Inc. (" + keychain + ")\nAcme Inc. has accepted the OpenE2EE terms.\n"},
+		{"person without a name", unnamed, false, "required",
+			"Signed in as jane@example.com in Acme Inc. (" + keychain + ")\nAcme Inc. has not accepted the OpenE2EE terms.\n"},
+		{"organization name without a period", plain, false, "accepted",
+			"Signed in as Jane Doe (jane@example.com) in Acme. (" + keychain + ")\nAcme has accepted the OpenE2EE terms.\n"},
+		{"agent", agent, false, "accepted",
+			"Signed in as an agent for Jane Doe (jane@example.com) in Acme Inc. (" + keychain + ")\nAcme Inc. has accepted the OpenE2EE terms.\n"},
+		{"environment credential", personSession(), true, "accepted",
+			"Signed in as Jane Doe (jane@example.com) in Acme Inc. (OE_ACCESS_TOKEN)\nAcme Inc. has accepted the OpenE2EE terms.\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("OE_ACCESS_TOKEN", "")
+			server := newConsole(t, test.terms, true)
+			server.session = test.session
+			store := credential.NewMemory()
+			if test.environment {
+				t.Setenv("OE_ACCESS_TOKEN", sessionToken())
+			} else {
+				// A stored session reads as the OS keychain, as Keychain.Get sets it.
+				server.storeSession(t, keychainStore{store})
+			}
+			dependencies := server.dependencies(keychainStore{store}, nil)
+			exit, stdout, stderr := run(t, dependencies, "--control-url", server.controlURL(), "auth", "status")
+			if exit != 0 || stdout != test.want {
+				t.Fatalf("auth status: exit=%d stdout=%q stderr=%q, want %q", exit, stdout, stderr, test.want)
+			}
+			for _, id := range []string{"user_", "org_", "agent_reg_"} {
+				if strings.Contains(stdout, id) {
+					t.Fatalf("auth status text names an ID %q: %q", id, stdout)
+				}
+			}
+			exit, stdout, _ = run(t, dependencies, "--json", "--control-url", server.controlURL(), "auth", "status")
+			status := decodeEvent(t, []byte(stdout))
+			registration, _ := status.Data["agent"].(map[string]any)
+			if exit != 0 || (test.name == "agent") != (registration["registrationId"] == "agent_reg_example") {
+				t.Fatalf("auth status JSON agent: exit=%d %s", exit, stdout)
+			}
+			if test.name == "person without a name" && (status.Data["userName"] != nil || status.Data["role"] != nil) {
+				t.Fatalf("a missing name or role is not null: %s", stdout)
+			}
+		})
+	}
+}
+
+// keychainStore reads a memory session as the OS keychain does.
+type keychainStore struct{ *credential.Memory }
+
+func (s keychainStore) Get(profile string) (credential.Credential, error) {
+	value, err := s.Memory.Get(profile)
+	value.Source = "keychain"
+	return value, err
+}
+
+func TestAuthStatusWithoutTheSessionRouteFails(t *testing.T) {
+	t.Setenv("OE_ACCESS_TOKEN", "")
+	server := newConsole(t, "accepted", true)
+	server.session = map[string]any{"schemaVersion": 1, "user": map[string]any{"id": "user_example"}}
+	store := credential.NewMemory()
+	server.storeSession(t, store)
+	exit, stdout, _ := run(t, server.dependencies(store, nil), "--json", "--control-url", server.controlURL(), "auth", "status")
+	if failure := decodeEvent(t, []byte(stdout)); exit == 0 || failure.Status != "error" ||
+		!strings.Contains(failure.Error, "incomplete session") {
+		t.Fatalf("an incomplete session answer passed: exit=%d %s", exit, stdout)
 	}
 }
 
@@ -500,7 +601,7 @@ func TestLoginOffersCreateLinkSkipInAnAppDirectory(t *testing.T) {
 			store := credential.NewMemory()
 			directory := appDirectory(t, "prompt-chat")
 			exit, stdout, stderr := run(t, personLogin(server, store, directory, test.answers), "--control-url", server.controlURL(), "auth", "login")
-			if exit != 0 || !strings.Contains(stdout, "Logged in to org_example.") || !strings.Contains(stdout, test.output) {
+			if exit != 0 || !strings.Contains(stdout, "Signed in as Jane Doe (jane@example.com) in Acme Inc.") || !strings.Contains(stdout, test.output) {
 				t.Fatalf("answer %q: exit=%d stdout=%q stderr=%q", test.answers, exit, stdout, stderr)
 			}
 			for _, line := range []string{setupPrompt, "1. Create a new signal-relay project (oe new)", "2. Link an existing project (oe link)", "3. Skip"} {
@@ -543,7 +644,7 @@ func TestLoginOutsideAnAppDirectoryOffersNothing(t *testing.T) {
 		dependencies := personLogin(server, credential.NewMemory(), directory, "")
 		dependencies.In = unreadable{t}
 		exit, stdout, stderr := run(t, dependencies, "--control-url", server.controlURL(), "auth", "login")
-		if exit != 0 || !strings.Contains(stdout, "Logged in to org_example.") || strings.Contains(stdout, "next:") || strings.Contains(stderr, setupPrompt) {
+		if exit != 0 || !strings.Contains(stdout, "Signed in as Jane Doe (jane@example.com) in Acme Inc.") || strings.Contains(stdout, "next:") || strings.Contains(stderr, setupPrompt) {
 			t.Fatalf("a login in %s offered a setup or a next command: exit=%d stdout=%q stderr=%q", directory, exit, stdout, stderr)
 		}
 		if names := entries(t, directory); len(names) != 0 {

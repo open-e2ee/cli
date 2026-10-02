@@ -53,3 +53,20 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 		t.Fatalf("delete did not remove credential: %v", err)
 	}
 }
+
+func TestLocationNamesTheStoreOfEachSystem(t *testing.T) {
+	for _, test := range []struct {
+		goos, source string
+		want         Location
+	}{
+		{"darwin", "keychain", Location{Key: "keychain", Label: "macOS Keychain"}},
+		{"linux", "keychain", Location{Key: "secret-service", Label: "Secret Service"}},
+		{"windows", "keychain", Location{Key: "wincred", Label: "Windows Credential Manager"}},
+		{"darwin", "environment", Location{Key: "environment", Label: "OE_ACCESS_TOKEN"}},
+		{"linux", "memory", Location{Key: "memory"}},
+	} {
+		if got := locationOf(test.goos, test.source); got != test.want {
+			t.Fatalf("%s %s: %#v, want %#v", test.goos, test.source, got, test.want)
+		}
+	}
+}

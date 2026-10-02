@@ -17,6 +17,7 @@ type API interface {
 	ConfigureNotifications(context.Context, CredentialRequest, string, NotificationConfigurationRequest) (NotificationConfiguration, error)
 	Terms(context.Context, CredentialRequest) (Terms, error)
 	AcceptTerms(context.Context, CredentialRequest, TermsAcceptanceRequest) (TermsAcceptance, error)
+	Session(context.Context, CredentialRequest) (Session, error)
 }
 
 type CredentialRequest struct {
@@ -34,6 +35,9 @@ type Authorization struct {
 	TokenEndpoint    string `json:"-"`
 	UserCode         string `json:"userCode"`
 	VerificationURL  string `json:"verificationUrl"`
+	// BareVerificationURL is the page without the code, where a person on
+	// another device types the code. It is empty when WorkOS gives none.
+	BareVerificationURL string `json:"bareVerificationUrl"`
 	// CodeInURL is true when VerificationURL already carries the user code, so
 	// the page asks the person to confirm the code instead of typing it.
 	CodeInURL bool `json:"-"`
@@ -221,4 +225,32 @@ type TermsAcceptanceRequest struct {
 type TermsAcceptance struct {
 	Terms
 	Changed bool `json:"changed"`
+}
+
+// Session is the identity behind an access token: the person, the
+// organization, and the role in it. Agent is set when an agent registration
+// holds the session for the person.
+type Session struct {
+	SchemaVersion int                 `json:"schemaVersion"`
+	User          SessionUser         `json:"user"`
+	Organization  SessionOrganization `json:"organization"`
+	Role          string              `json:"role"`
+	Agent         *SessionAgent       `json:"agent"`
+}
+
+// SessionUser is the person of a session. Name is empty when the person has
+// none.
+type SessionUser struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
+type SessionOrganization struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type SessionAgent struct {
+	RegistrationID string `json:"registrationId"`
 }

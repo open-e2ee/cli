@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -88,6 +89,38 @@ func Resolve(store Store, profile string) (Credential, error) {
 		}, nil
 	}
 	return store.Get(profile)
+}
+
+// Location names where a credential comes from. Key is stable for a program
+// to read, and Label is the name that a person knows.
+type Location struct {
+	Key   string
+	Label string
+}
+
+// LocationOf names the location of a credential with source on this system.
+func LocationOf(source string) Location {
+	return locationOf(runtime.GOOS, source)
+}
+
+// locationOf names the store that go-keyring uses on goos for a stored
+// session. A source with no known store keeps its name as the key and has no
+// label.
+func locationOf(goos, source string) Location {
+	switch source {
+	case "environment":
+		return Location{Key: "environment", Label: "OE_ACCESS_TOKEN"}
+	case "keychain":
+		switch goos {
+		case "darwin":
+			return Location{Key: "keychain", Label: "macOS Keychain"}
+		case "windows":
+			return Location{Key: "wincred", Label: "Windows Credential Manager"}
+		default:
+			return Location{Key: "secret-service", Label: "Secret Service"}
+		}
+	}
+	return Location{Key: source}
 }
 
 func Profile(controlURL string) (string, error) {

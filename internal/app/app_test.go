@@ -36,6 +36,7 @@ func TestAuthLoginStoresBrowserCredentialWithoutPrintingToken(t *testing.T) {
 		terms: func(context.Context, control.CredentialRequest) (control.Terms, error) {
 			return control.Terms{State: control.TermsAccepted, CanAccept: true}, nil
 		},
+		session: acmeSession,
 	}
 	var stdout, stderr bytes.Buffer
 	var opened string
@@ -504,6 +505,7 @@ type fakeAPI struct {
 	configureNotifications func(context.Context, control.CredentialRequest, string, control.NotificationConfigurationRequest) (control.NotificationConfiguration, error)
 	terms                  func(context.Context, control.CredentialRequest) (control.Terms, error)
 	acceptTerms            func(context.Context, control.CredentialRequest, control.TermsAcceptanceRequest) (control.TermsAcceptance, error)
+	session                func(context.Context, control.CredentialRequest) (control.Session, error)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -592,13 +594,33 @@ func (f *fakeAPI) AcceptTerms(ctx context.Context, credential control.Credential
 	return f.acceptTerms(ctx, credential, request)
 }
 
-func TestLoginPromptMatchesTheVerificationPage(t *testing.T) {
-	complete := control.Authorization{VerificationURL: "https://login.example/device?user_code=ABCD-EFGH", UserCode: "ABCD-EFGH", CodeInURL: true}
-	if got := loginPrompt(complete); got != "Open https://login.example/device?user_code=ABCD-EFGH and confirm that it shows the code ABCD-EFGH." {
-		t.Fatalf("complete URL prompt: %q", got)
+func (f *fakeAPI) Session(ctx context.Context, credential control.CredentialRequest) (control.Session, error) {
+	if f.session == nil {
+		return control.Session{}, errors.New("unexpected Session")
 	}
-	bare := control.Authorization{VerificationURL: "https://login.example/device", UserCode: "ABCD-EFGH"}
-	if got := loginPrompt(bare); got != "Open https://login.example/device and enter the code ABCD-EFGH." {
-		t.Fatalf("bare URL prompt: %q", got)
+	return f.session(ctx, credential)
+}
+
+func TestLoginPromptMatchesTheVerificationPage(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		authorization control.Authorization
+		want          string
+	}{
+		{"both URLs", control.Authorization{
+			VerificationURL: "https://login.example/device?user_code=ABCD-EFGH", BareVerificationURL: "https://login.example/device",
+			UserCode: "ABCD-EFGH", CodeInURL: true,
+		}, "Open https://login.example/device?user_code=ABCD-EFGH and confirm that it shows the code ABCD-EFGH.\n" +
+			"On another device, go to https://login.example/device and enter ABCD-EFGH."},
+		{"complete URL only", control.Authorization{
+			VerificationURL: "https://login.example/device?user_code=ABCD-EFGH", UserCode: "ABCD-EFGH", CodeInURL: true,
+		}, "Open https://login.example/device?user_code=ABCD-EFGH and confirm that it shows the code ABCD-EFGH."},
+		{"bare URL only", control.Authorization{
+			VerificationURL: "https://login.example/device", BareVerificationURL: "https://login.example/device", UserCode: "ABCD-EFGH",
+		}, "Open https://login.example/device and enter the code ABCD-EFGH."},
+	} {
+		if got := loginPrompt(test.authorization); got != test.want {
+			t.Fatalf("%s prompt: %q, want %q", test.name, got, test.want)
+		}
 	}
 }

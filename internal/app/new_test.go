@@ -216,7 +216,7 @@ func TestNewOnAnExistingProjectIsProjectExistsAndNeverLinks(t *testing.T) {
 	}{
 		"same organization": {
 			http.StatusOK, `{"created":false,"project":"taken-chat","writer":"config"}`,
-			"PROJECT_EXISTS", exitUsage, "Project taken-chat already exists in org_example. To use the existing project, run oe link taken-chat.",
+			"PROJECT_EXISTS", exitUsage, "Project taken-chat already exists in your organization. To use the existing project, run oe link taken-chat.",
 		},
 		"other organization": {
 			http.StatusNotFound, `{"code":"PROJECT_NOT_FOUND","message":"Project not found."}`,
@@ -313,6 +313,9 @@ func TestNewUnderAnAgentWithoutTermsExitsFive(t *testing.T) {
 		accepted.Store(true)
 		io.WriteString(response, `{"state":"accepted","canAccept":true,"documents":[],"acceptedAt":"2026-09-30T00:00:00Z","changed":true}`)
 	})
+	server.mux.HandleFunc("GET /v1/auth/session", func(response http.ResponseWriter, _ *http.Request) {
+		io.WriteString(response, `{"schemaVersion":1,"user":{"id":"user_example","email":"jane@example.com","name":null},"organization":{"id":"org_example","name":"Acme Inc."},"role":"admin","agent":null}`)
+	})
 	store := credential.NewMemory()
 	storeSession(t, store, sessionToken())
 
@@ -341,7 +344,7 @@ func TestNewUnderAnAgentWithoutTermsExitsFive(t *testing.T) {
 	server.mu.Lock()
 	accepters := strings.Join(actors, ",")
 	server.mu.Unlock()
-	if exit != 0 || !strings.Contains(stderr, "Accept these terms for org_example?") || accepters != "person" {
+	if exit != 0 || !strings.Contains(stderr, "Accept these terms for Acme Inc.?") || accepters != "person" {
 		t.Fatalf("a person could not accept the terms in oe new: exit=%d %q %q actors=%v", exit, stdout, stderr, actors)
 	}
 	keys, _, _ := server.calls()

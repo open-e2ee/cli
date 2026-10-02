@@ -74,16 +74,19 @@ func (r *runner) authLogin(ctx context.Context, args []string) error {
 		return err
 	}
 	request := control.CredentialRequest{AccessToken: session.AccessToken}
+	identity, err := r.api.Session(ctx, request)
+	if err != nil {
+		return err
+	}
 	terms, err := r.api.Terms(ctx, request)
 	if err != nil {
 		return err
 	}
-	claims := sessionClaimsOf(session.AccessToken)
-	data := claims.data()
-	data["source"] = session.Source
+	data := sessionData(identity, session.Source)
+	organization := identity.Organization.Name
 	accepting := *acceptTerms && terms.State == control.TermsRequired
 	if !*acceptTerms && terms.State == control.TermsRequired && terms.CanAccept && r.canPrompt() {
-		accepting, err = r.askTerms(claims.organizationName(), terms.Documents)
+		accepting, err = r.askTerms(organization, terms.Documents)
 		if err != nil {
 			return err
 		}
@@ -102,29 +105,25 @@ func (r *runner) authLogin(ctx context.Context, args []string) error {
 	data["terms"] = terms.State
 	data["canAccept"] = terms.CanAccept
 
-	var message []string
-	switch {
-	case loggedIn:
-		message = append(message, "Logged in to "+claims.organizationName()+".")
-	case session.Source == "environment":
+	message := []string{signedIn(identity)}
+	if session.Source == "environment" {
 		message = append(message, "Using the scoped CI credential from OE_ACCESS_TOKEN. It was not stored.")
 	}
-	subject := claims.organizationSubject()
 	next := ""
 	switch {
 	case terms.State == control.TermsAccepted && changed:
-		message = append(message, subject+" accepted the OpenE2EE terms.")
+		message = append(message, organization+" accepted the OpenE2EE terms.")
 		next = setupNext(r.directory)
 	case terms.State == control.TermsAccepted:
-		message = append(message, subject+" has accepted the OpenE2EE terms.")
+		message = append(message, organization+" has accepted the OpenE2EE terms.")
 		next = setupNext(r.directory)
 	case terms.CanAccept:
-		message = append(message, subject+" has not accepted the OpenE2EE terms.")
+		message = append(message, organization+" has not accepted the OpenE2EE terms.")
 		data["documents"] = termsDocuments(terms.Documents)
 		next = acceptTermsCommand
 	default:
-		message = append(message, subject+" has not accepted the OpenE2EE terms. An administrator of "+
-			claims.organizationName()+" must accept them, in the console or with "+acceptTermsCommand+".")
+		message = append(message, organization+" has not accepted the OpenE2EE terms. An administrator of "+
+			organization+" must accept them, in the console or with "+acceptTermsCommand+".")
 		data["documents"] = termsDocuments(terms.Documents)
 	}
 	text := strings.Join(message, " ")
@@ -201,17 +200,20 @@ func (r *runner) loginSession(ctx context.Context, timeout time.Duration, accept
 
 // announcePending shows the device flow of oe auth login as a pending event.
 // Under an agent it is the first of two JSON documents, so the agent can hand
-// the URL and the code to the person while the CLI polls.
+// the URL and the code to the person while the CLI polls. action.url is the
+// page to open; data.bareVerificationUrl is the page for another device.
 func (r *runner) announcePending(authorization control.Authorization) {
 	message := "A person must approve this device."
 	if r.out.Mode() == output.Text {
 		message = loginPrompt(authorization)
 	}
+	data := map[string]any{"userCode": authorization.UserCode, "expiresInSeconds": authorization.ExpiresInSeconds}
+	if authorization.BareVerificationURL != "" {
+		data["bareVerificationUrl"] = authorization.BareVerificationURL
+	}
 	_ = r.out.Pending("auth login", message, output.Action{
 		Kind: "browser", URL: authorization.VerificationURL, Reason: "login",
-	}, map[string]any{
-		"userCode": authorization.UserCode, "expiresInSeconds": authorization.ExpiresInSeconds,
-	})
+	}, data)
 }
 
 // askTerms is the one terms prompt for a person at a terminal. It lists each
@@ -231,8 +233,10 @@ func (r *runner) termsActor(flag bool) control.TermsAcceptanceRequest {
 	return control.TermsAcceptanceRequest{Actor: "person"}
 }
 
-// authStatus reads the session and the terms state of its organization. The
-// terms read also checks the session with the control API.
+// authStatus reads the identity of the session and the terms state of its
+// organization. Both reads also check the session with the control API. The
+// text names the person, the organization, and the store; the IDs and the
+// role are in the data only.
 func (r *runner) authStatus(ctx context.Context, args []string) error {
 	if err := parseFlags(newFlags("auth status"), "auth", args); err != nil {
 		return err
@@ -241,37 +245,66 @@ func (r *runner) authStatus(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	terms, err := r.api.Terms(ctx, control.CredentialRequest{AccessToken: session.AccessToken})
+	request := control.CredentialRequest{AccessToken: session.AccessToken}
+	identity, err := r.api.Session(ctx, request)
 	if err != nil {
 		return err
 	}
-	claims := sessionClaimsOf(session.AccessToken)
-	data := claims.data()
+	terms, err := r.api.Terms(ctx, request)
+	if err != nil {
+		return err
+	}
+	data := sessionData(identity, session.Source)
 	data["terms"] = terms.State
 	data["canAccept"] = terms.CanAccept
-	data["source"] = session.Source
 
-	message := "Logged in"
-	if claims.User != "" {
-		message += " as " + claims.User
+	message := signedIn(identity)
+	if label := credential.LocationOf(session.Source).Label; label != "" {
+		message += " (" + label + ")"
 	}
-	message += " to " + claims.organizationName()
-	if claims.Role != "" {
-		message += " with the role " + claims.Role
-	}
-	message += "."
 	if terms.State == control.TermsAccepted {
-		message += " " + claims.organizationSubject() + " has accepted the OpenE2EE terms."
+		message += "\n" + identity.Organization.Name + " has accepted the OpenE2EE terms."
 	} else {
-		message += " " + claims.organizationSubject() + " has not accepted the OpenE2EE terms."
-	}
-	switch session.Source {
-	case "environment":
-		message += " The credential is OE_ACCESS_TOKEN."
-	case "keychain":
-		message += " The session is in the OS keychain."
+		message += "\n" + identity.Organization.Name + " has not accepted the OpenE2EE terms."
 	}
 	return r.out.Success("auth status", message, data)
+}
+
+// signedIn names the person of a session, and the agent that holds it for
+// the person, in the organization. It shows no ID.
+func signedIn(session control.Session) string {
+	person := session.User.Email
+	if session.User.Name != "" {
+		person = session.User.Name + " (" + session.User.Email + ")"
+	}
+	if session.Agent != nil {
+		person = "an agent for " + person
+	}
+	// An organization name such as "Acme Inc." already ends the sentence.
+	return strings.TrimSuffix("Signed in as "+person+" in "+session.Organization.Name, ".") + "."
+}
+
+// sessionData is the identity part of a result: the IDs, the names, the role,
+// the agent registration, and where the credential comes from. A name or a
+// role that the session lacks is null.
+func sessionData(session control.Session, source string) map[string]any {
+	data := map[string]any{
+		"user": session.User.ID, "email": session.User.Email, "userName": nullable(session.User.Name),
+		"organization": map[string]any{"id": session.Organization.ID}, "organizationName": session.Organization.Name,
+		"role": nullable(session.Role), "source": source, "store": credential.LocationOf(source).Key,
+	}
+	if session.Agent != nil {
+		data["agent"] = map[string]any{"registrationId": session.Agent.RegistrationID}
+	}
+	return data
+}
+
+// nullable is nil for an empty value, so JSON shows null.
+func nullable(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func (r *runner) authLogout(args []string) error {
@@ -293,13 +326,12 @@ func (r *runner) authLogout(args []string) error {
 	return r.out.Success("auth logout", message, map[string]any{"profile": profile, "environmentCredential": environment})
 }
 
-// sessionClaims are the claims of a WorkOS access token that name a session.
-// The control API verifies the token; the CLI decodes the claims only to show
-// them. A token that is not a JWT has none.
+// sessionClaims are the claims of a WorkOS access token that oe new reads
+// without a request. The control API verifies the token; the CLI decodes the
+// claims only to key an operation and to report the organization ID. A token
+// that is not a JWT has none.
 type sessionClaims struct {
-	User         string `json:"sub"`
 	Organization string `json:"org_id"`
-	Role         string `json:"role"`
 }
 
 func sessionClaimsOf(token string) sessionClaims {
@@ -316,38 +348,6 @@ func sessionClaimsOf(token string) sessionClaims {
 		return sessionClaims{}
 	}
 	return claims
-}
-
-// data is the session part of a result. Only a claim that the token holds
-// appears.
-func (c sessionClaims) data() map[string]any {
-	data := map[string]any{}
-	if c.Organization != "" {
-		data["organization"] = map[string]any{"id": c.Organization}
-	}
-	if c.User != "" {
-		data["user"] = c.User
-	}
-	if c.Role != "" {
-		data["role"] = c.Role
-	}
-	return data
-}
-
-// organizationName names the organization inside a sentence.
-func (c sessionClaims) organizationName() string {
-	if c.Organization == "" {
-		return "your organization"
-	}
-	return c.Organization
-}
-
-// organizationSubject names the organization at the start of a sentence.
-func (c sessionClaims) organizationSubject() string {
-	if c.Organization == "" {
-		return "Your organization"
-	}
-	return c.Organization
 }
 
 // termsDocuments is never nil, so JSON shows an empty list, not null.
